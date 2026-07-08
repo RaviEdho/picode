@@ -12,6 +12,7 @@ type Client struct {
 	BaseURL    string
 	APIKey     string
 	Model      string
+	Tools      []Tool
 	HTTPClient *http.Client
 }
 
@@ -30,6 +31,7 @@ func (c *Client) ChatCompletion(messages []Message) (*ChatCompletionResponse, er
 	req := ChatCompletionRequest{
 		Model:    c.Model,
 		Messages: messages,
+		Tools:    c.Tools,
 		Stream:   false,
 	}
 

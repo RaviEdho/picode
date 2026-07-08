@@ -2,18 +2,22 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	colorReset = "\033[0m"
-	colorCyan  = "\033[1;36m"
-	colorGreen = "\033[1;32m"
+	colorReset  = "\033[0m"
+	colorCyan   = "\033[1;36m"
+	colorGreen  = "\033[1;32m"
+	colorYellow = "\033[1;33m"
 )
 
 func main() {
@@ -23,6 +27,18 @@ func main() {
 	flag.Parse()
 
 	client := NewClient(*baseURL, *apiKey, *model)
+	client.Tools = []Tool{{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "run_command",
+			Description: "Execute a shell command and return its stdout/stderr",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"command": map[string]any{"type": "string", "description": "The shell command to execute"}},
+				"required":   []string{"command"},
+			},
+		},
+	}}
 	scanner := bufio.NewScanner(os.Stdin)
 	var history []Message
 	var totalPrompt, totalCached, totalCompletion int
@@ -76,23 +92,51 @@ func main() {
 			continue
 		}
 
-		if len(resp.Choices) == 0 {
-			fmt.Println("(empty response)")
-			history = history[:len(history)-1]
-			continue
-		}
+		// Handle tool calls in a loop until the model produces a final text response.
+		for {
+			if len(resp.Choices) == 0 {
+				fmt.Println("(empty response)")
+				history = history[:len(history)-1]
+				break
+			}
 
-		assistant := resp.Choices[0].Message
-		history = append(history, assistant)
+			assistant := resp.Choices[0].Message
+			history = append(history, assistant)
+			accumulateUsage(resp, &totalPrompt, &totalCached, &totalCompletion)
 
-		cached := 0
-		if resp.Usage.PromptTokensDetails != nil {
-			cached = resp.Usage.PromptTokensDetails.CachedTokens
+			if resp.Choices[0].FinishReason != "tool_calls" {
+				fmt.Printf("%smodel>%s %s\n", colorGreen, colorReset, assistant.Content)
+				break
+			}
+
+			// Execute each tool call and append results to history.
+			for _, tc := range assistant.ToolCalls {
+				var args struct {
+					Command string `json:"command"`
+				}
+				if uErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); uErr != nil {
+					history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("error: invalid arguments: %v", uErr)})
+					continue
+				}
+
+				fmt.Printf("%srun_command>%s %s\n", colorYellow, colorReset, args.Command)
+				output, cmdErr := runShellCommand(args.Command)
+				if cmdErr != nil {
+					output = fmt.Sprintf("error: %v", cmdErr)
+				}
+				fmt.Printf("%s   output>%s %s\n", colorYellow, colorReset, output)
+
+				history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
+			}
+
+			// Continue the conversation with tool results.
+			resp, err = client.ChatCompletion(history)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				history = history[:len(history)-1]
+				break
+			}
 		}
-		totalPrompt += resp.Usage.PromptTokens
-		totalCached += cached
-		totalCompletion += resp.Usage.CompletionTokens
-		fmt.Printf("%smodel>%s %s\n", colorGreen, colorReset, assistant.Content)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -102,4 +146,21 @@ func main() {
 		totalPrompt, totalCached, totalCompletion,
 		totalPrompt+totalCached+totalCompletion)
 	fmt.Println()
+}
+
+func accumulateUsage(resp *ChatCompletionResponse, prompt, cached, completion *int) {
+	*prompt += resp.Usage.PromptTokens
+	if resp.Usage.PromptTokensDetails != nil {
+		*cached += resp.Usage.PromptTokensDetails.CachedTokens
+	}
+	*completion += resp.Usage.CompletionTokens
+}
+
+func runShellCommand(command string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

@@ -1,77 +1,47 @@
 # picode
 
-Minimal CLI chat harness for local LLMs. Connects to any OpenAI-compatible `/v1/chat/completions` endpoint — primarily built for [llama-server](https://github.com/ggerganov/llama.cpp/tree/master/tools/server).
-
-Zero dependencies. Stdlib only.
+CLI chat for local LLMs. Connects to any OpenAI-compatible `/v1/chat/completions` endpoint. Zero dependencies, stdlib only.
 
 ## Install
 
 ```bash
+# Linux / macOS
 go build -o picode .
+
+# Windows
+go build -o picode.exe .
 ```
 
-Or run directly:
+Or run directly on any platform:
 
 ```bash
 go run .
 ```
 
-## Usage
-
-```bash
-# defaults: localhost:8080, no auth, server picks model
-picode
-
-# custom endpoint
-picode -base-url http://192.168.1.5:8080 -model llama3
-
-# with API key (e.g. OpenAI)
-picode -base-url https://api.openai.com -api-key sk-... -model gpt-4
-```
-
-### Flags
+## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-base-url` | `http://localhost:8080` | Server base URL |
-| `-api-key` | *(empty)* | Bearer token (empty = no auth) |
+| `-api-key` | *(empty)* | Bearer token |
 | `-model` | *(empty)* | Model name (empty = server default) |
 
-## Chat
+## Tools
 
-```
-picode — type 'exit' or Ctrl-D to quit
-you> hello
-model> Hi there! How can I help you today?
-you> what is 2+2
-model> The answer is 4.
-you> exit
+The model has access to `run_command` — a shell tool that executes commands on your machine. This lets it run any CLI tool (`curl`, `grep`, `psql`, etc.).
 
-session ended [↑280 🗘 120 ↓45 ∑445]
-```
+## Session
 
-Conversation history accumulates for the full session. Exit with `exit`, `quit`, or `Ctrl-D`.
-
-### Token Summary
-
-Printed once on session exit:
+Exit with `exit`, `quit`, or `Ctrl-D`. On exit, a token summary is printed:
 
 | Symbol | Meaning |
 |--------|---------|
 | `↑` | Prompt tokens sent |
-| `🗘` | Cached tokens (KV cache hits) |
+| `🗘` | Cached tokens |
 | `↓` | Completion tokens received |
-| `∑` | Total (sent + cached + received) |
-
-## Project Structure
-
-| File | Purpose |
-|------|---------|
-| `main.go` | Flags, REPL loop, I/O |
-| `client.go` | HTTP client, chat completion request |
-| `types.go` | OpenAI-compatible request/response structs |
+| `∑` | Total |
 
 ## Requirements
 
 - Go 1.21+
-- A running LLM server with OpenAI-compatible API
+- An LLM server with OpenAI-compatible API
