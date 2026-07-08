@@ -55,11 +55,35 @@ func main() {
 		return
 	}
 
-	// Trap Ctrl-C (and SIGTERM) so the process is not killed with the
-	// default "signal: interrupt" behaviour. This lets us unwind cleanly
-	// and still print the session summary below.
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Session context: cancelled only when the user requests exit (or a fatal
+	// interrupt while idle). We manage Ctrl-C manually below so that a Ctrl-C
+	// while a command is running cancels just that command and keeps the
+	// session alive, instead of always ending the session.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Manual interrupt handling: bisect Ctrl-C by whether a shell command is
+	// currently executing. If one is running, cancel only that command
+	// (commandRunning + currentCommandCancel in tools.go). If idle at the
+	// prompt, end the whole session. This replaces signal.NotifyContext so the
+	// two cases get different behaviour.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		for range sigCh {
+			commandMu.Lock()
+			running := commandRunning.Load()
+			cancelFn := currentCommandCancel
+			commandMu.Unlock()
+			if running && cancelFn != nil {
+				// Cancel only the in-flight command; session continues.
+				cancelFn()
+			} else {
+				// Idle at prompt (or missing cancel fn): end the session.
+				cancel()
+			}
+		}
+	}()
 
 	client := NewClient(*baseURL, *apiKey, *model)
 	client.Tools = allTools()
@@ -164,10 +188,19 @@ outer:
 
 				// Execute each tool call and append results to history.
 				for _, tc := range assistant.ToolCalls {
-					cmd, output := executeToolCall(ctx, tc)
+					// Fresh per-command context so a manual Ctrl-C can cancel only
+					// this command (via currentCommandCancel) without ending the
+					// session. It still inherits ctx, so a session exit also cancels.
+					cmdCtx, cmdCancel := context.WithCancel(ctx)
+					cmd, output := executeToolCall(cmdCtx, tc)
+					cmdCancel()
+
+					if strings.Contains(output, "command cancelled by user") {
+						fmt.Printf("%s^C cancelled run_command%s\n", colorYellow, colorReset)
+					}
 					if ctx.Err() != nil {
-						// Interrupted mid-dispatch: bail (we drop the whole
-						// session on Ctrl-C).
+						// Session itself was cancelled (e.g. Ctrl-C at idle prompt):
+						// bail out, dropping the rest of the turn.
 						break outer
 					}
 					if cmd != "" {

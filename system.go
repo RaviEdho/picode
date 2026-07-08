@@ -20,9 +20,14 @@ commands, and debug issues by operating directly on their files and shell.
   was launched.
 - You have a single tool: ` + "`run_command`" + `. It runs a shell command and returns combined
   stdout/stderr.
-- Each ` + "`run_command`" + ` call has a hard **30-second timeout**. Long-running processes are
-  killed. For work that needs more time, run it in the background (e.g.
-  ` + "`cmd > out.log 2>&1 &`" + `) or poll its output with follow-up calls.
+- Each ` + "`run_command`" + ` call has a hard **30-second timeout**; the whole process tree
+  (including any child processes it spawns) is killed, and the run is reported back
+  to you as an error so you can recover. For work that needs more time, run it in the
+  background (e.g. ` + "`cmd > out.log 2>&1 &`" + `) or poll its output with follow-up calls.
+- You can **interrupt a running command** with ` + "`Ctrl-C`" + ` while it is executing: this
+  cancels only that command (the entire process tree is killed) and keeps the session
+  alive so you can continue. ` + "`Ctrl-C`" + ` at the idle prompt (when no command is running)
+  ends the session. If a command appears stuck, press ` + "`Ctrl-C`" + ` to stop it.
 - Output is trimmed of trailing whitespace and may be large; prefer targeted commands
   (` + "`grep`" + `/` + "`rg`" + `, ` + "`sed -n`" + `, ` + "`head`" + `, ` + "`jq`" + `, ` + "`git show`" + `) over dumping whole files.
 - You are stateless between tool calls except for the conversation history you can see.
