@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,6 +19,8 @@ const (
 	colorCyan   = "\033[1;36m"
 	colorGreen  = "\033[1;32m"
 	colorYellow = "\033[1;33m"
+	colorFaded  = "\033[2;37m" // dim/bright-black-ish white for placeholder text
+	clearEOL    = "\033[K"     // ANSI: clear from cursor to end of line
 )
 
 func main() {
@@ -60,29 +63,27 @@ func main() {
 
 		history = append(history, Message{Role: "user", Content: input})
 
-		resp, err := chatWithSpinner(client, history)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			// remove failed user message
-			history = history[:len(history)-1]
-			continue
-		}
-
-		// Handle tool calls in a loop until the model produces a final text response.
+		// Loop until the model produces a final (non-tool-call) response.
 		for {
-			if len(resp.Choices) == 0 {
+			assistant, usage, finishReason, err := streamAssistant(client, history)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				// remove failed user message
+				history = history[:len(history)-1]
+				break
+			}
+			if assistant == nil {
 				fmt.Println("(empty response)")
 				history = history[:len(history)-1]
 				break
 			}
 
-			assistant := resp.Choices[0].Message
-			history = append(history, assistant)
-			accumulateUsage(resp, &totalPrompt, &totalCached, &totalCompletion)
+			history = append(history, *assistant)
+			if usage != nil {
+				accumulateUsage(*usage, &totalPrompt, &totalCached, &totalCompletion)
+			}
 
-			if resp.Choices[0].FinishReason != "tool_calls" {
-				fmt.Printf("%smodel>%s %s\n", colorGreen, colorReset, assistant.Content)
+			if finishReason != "tool_calls" {
 				break
 			}
 
@@ -105,14 +106,6 @@ func main() {
 
 				history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
 			}
-
-			// Continue the conversation with tool results.
-			resp, err = chatWithSpinner(client, history)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				history = history[:len(history)-1]
-				break
-			}
 		}
 	}
 
@@ -125,40 +118,161 @@ func main() {
 	fmt.Println()
 }
 
-func chatWithSpinner(client *Client, history []Message) (*ChatCompletionResponse, error) {
-	// show a spinner while waiting for the model to respond
+// streamAssistant streams the model's response, printing tokens live.
+// It returns the assembled assistant message, usage (if any), and finish reason.
+func streamAssistant(client *Client, history []Message) (*Message, *Usage, string, error) {
+	// Show "waiting for response" the instant the request is sent.
+	update, stop := spinWithStatus("waiting for response")
+	defer stop() // clears the line on every exit path
+
+	stream, err := client.StreamChat(history)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	defer stream.Close()
+
+	var (
+		content   strings.Builder
+		toolCalls []ToolCall
+		role      string
+		finish    string
+		usage     *Usage
+	)
+
+	gotFirstChunk := false
+	printedPrefix := false
+
+	for {
+		chunk, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, "", err
+		}
+
+		// Server has started responding: move from "waiting" to "thinking".
+		if !gotFirstChunk {
+			gotFirstChunk = true
+			update("thinking")
+		}
+
+		if chunk.Usage != nil {
+			usage = chunk.Usage
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		ch := chunk.Choices[0]
+		if ch.FinishReason != nil {
+			finish = *ch.FinishReason
+		}
+		d := ch.Delta
+		if d.Role != "" {
+			role = d.Role
+		}
+		if d.Content != "" {
+			// First visible content: only now do we clear the spinner
+			// and print the "model> " prefix.
+			if !printedPrefix {
+				printedPrefix = true
+				stop()
+				fmt.Printf("%smodel>%s ", colorGreen, colorReset)
+			}
+			fmt.Printf("%s", d.Content)
+			content.WriteString(d.Content)
+		}
+		for _, tc := range d.ToolCalls {
+			// Tool call: clear the placeholder; no "model> " text to print.
+			stop()
+			for len(toolCalls) <= tc.Index {
+				toolCalls = append(toolCalls, ToolCall{})
+			}
+			cur := &toolCalls[tc.Index]
+			if tc.ID != "" {
+				cur.ID = tc.ID
+			}
+			if tc.Type != "" {
+				cur.Type = tc.Type
+			}
+			if tc.Function.Name != "" {
+				cur.Function.Name = tc.Function.Name
+			}
+			cur.Function.Arguments += tc.Function.Arguments
+		}
+		if chunk.Usage != nil {
+			usage = chunk.Usage
+		}
+	}
+
+	if printedPrefix {
+		fmt.Println() // newline after streamed text
+	}
+
+	// Nothing produced (empty stream / no choices): return nil so the
+	// caller shows "(empty response)" rather than a dangling cleared prompt.
+	if content.Len() == 0 && len(toolCalls) == 0 {
+		return nil, usage, finish, nil
+	}
+
+	msg := &Message{Role: role, Content: content.String()}
+	if len(toolCalls) > 0 {
+		msg.ToolCalls = toolCalls
+	}
+	return msg, usage, finish, nil
+}
+
+// spinWithStatus shows a spinner with a status label until stop is invoked,
+// then clears the line. The label can be changed via the returned update fn.
+func spinWithStatus(initial string) (update func(string), stop func()) {
 	done := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	status := initial
 	var wg sync.WaitGroup
 	wg.Add(1)
+	// Print the placeholder immediately so the user sees feedback the
+	// moment the message is sent.
+	fmt.Printf("\r%smodel>%s %s%s%s |%s", colorGreen, colorReset, colorFaded, status, colorReset, clearEOL)
 	go func() {
 		defer wg.Done()
 		frames := []string{"|", "/", "-", "\\"}
-		i := 0
+		i := 1
 		for {
-			fmt.Printf("\r%smodel>%s thinking %s", colorGreen, colorReset, frames[i%len(frames)])
-			i++
 			select {
 			case <-done:
 				return
 			case <-time.After(100 * time.Millisecond):
 			}
+			mu.Lock()
+			s := status
+			fmt.Printf("\r%smodel>%s %s%s %s%s%s", colorGreen, colorReset, colorFaded, s, frames[i%len(frames)], colorReset, clearEOL)
+			mu.Unlock()
+			i++
 		}
 	}()
-
-	resp, err := client.ChatCompletion(history)
-
-	close(done)
-	wg.Wait()
-	fmt.Print("\r" + strings.Repeat(" ", 60) + "\r") // clear spinner line
-	return resp, err
+	update = func(s string) {
+		mu.Lock()
+		status = s
+		fmt.Printf("\r%smodel>%s %s%s%s |%s", colorGreen, colorReset, colorFaded, s, colorReset, clearEOL)
+		mu.Unlock()
+	}
+	stop = func() {
+		once.Do(func() {
+			close(done)
+			wg.Wait()
+			fmt.Print("\r" + strings.Repeat(" ", 60) + "\r") // clear spinner line
+		})
+	}
+	return update, stop
 }
 
-func accumulateUsage(resp *ChatCompletionResponse, prompt, cached, completion *int) {
-	*prompt += resp.Usage.PromptTokens
-	if resp.Usage.PromptTokensDetails != nil {
-		*cached += resp.Usage.PromptTokensDetails.CachedTokens
+func accumulateUsage(u Usage, prompt, cached, completion *int) {
+	*prompt += u.PromptTokens
+	if u.PromptTokensDetails != nil {
+		*cached += u.PromptTokensDetails.CachedTokens
 	}
-	*completion += resp.Usage.CompletionTokens
+	*completion += u.CompletionTokens
 }
 
 func runShellCommand(command string) (string, error) {
