@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,7 +80,7 @@ func (s *StreamReader) Close() error {
 // StreamChat sends the request with streaming enabled and returns a StreamReader.
 // If the server does not support SSE (Content-Type is not text/event-stream),
 // the single JSON response is wrapped as one chunk so callers work uniformly.
-func (c *Client) StreamChat(messages []Message) (*StreamReader, error) {
+func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamReader, error) {
 	req := ChatCompletionRequest{
 		Model:    c.Model,
 		Messages: messages,
@@ -95,7 +96,7 @@ func (c *Client) StreamChat(messages []Message) (*StreamReader, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

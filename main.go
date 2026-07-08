@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -29,6 +31,12 @@ func main() {
 	model := flag.String("model", "", "model name (empty = server default)")
 	flag.Parse()
 
+	// Trap Ctrl-C (and SIGTERM) so the process is not killed with the
+	// default "signal: interrupt" behaviour. This lets us unwind cleanly
+	// and still print the session summary below.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	client := NewClient(*baseURL, *apiKey, *model)
 	client.Tools = []Tool{{
 		Type: "function",
@@ -42,76 +50,126 @@ func main() {
 			},
 		},
 	}}
-	scanner := bufio.NewScanner(os.Stdin)
+
+	// Read stdin in a goroutine so that Ctrl-C (which cancels ctx) can
+	// interrupt a blocking read on the prompt instead of leaving Scan()
+	// hanging forever.
+	type inputResult struct {
+		text string
+		ok   bool
+	}
+	inCh := make(chan inputResult, 1)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+	readLoop:
+		for scanner.Scan() {
+			select {
+			case inCh <- inputResult{text: scanner.Text(), ok: true}:
+			case <-ctx.Done():
+				break readLoop
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			// Report a genuine read error so it isn't silently swallowed,
+			// but never block on the channel if we were cancelled.
+			select {
+			case inCh <- inputResult{ok: false}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		select {
+		case inCh <- inputResult{ok: false}:
+		case <-ctx.Done():
+		}
+	}()
+
 	var history []Message
 	var totalPrompt, totalCached, totalCompletion int
 
 	fmt.Println("picode — type 'exit' or Ctrl-D to quit")
 
+outer:
 	for {
 		fmt.Printf("%syou>%s ", colorCyan, colorReset)
-		if !scanner.Scan() {
-			break
-		}
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			continue
-		}
-		if input == "exit" || input == "quit" {
-			break
-		}
-
-		history = append(history, Message{Role: "user", Content: input})
-
-		// Loop until the model produces a final (non-tool-call) response.
-		for {
-			assistant, usage, finishReason, err := streamAssistant(client, history)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				// remove failed user message
-				history = history[:len(history)-1]
-				break
+		select {
+		case <-ctx.Done():
+			break outer
+		case res := <-inCh:
+			if !res.ok {
+				break outer
 			}
-			if assistant == nil {
-				fmt.Println("(empty response)")
-				history = history[:len(history)-1]
-				break
+			input := strings.TrimSpace(res.text)
+			if input == "" {
+				continue
+			}
+			if input == "exit" || input == "quit" {
+				break outer
 			}
 
-			history = append(history, *assistant)
-			if usage != nil {
-				accumulateUsage(*usage, &totalPrompt, &totalCached, &totalCompletion)
-			}
+			history = append(history, Message{Role: "user", Content: input})
 
-			if finishReason != "tool_calls" {
-				break
-			}
-
-			// Execute each tool call and append results to history.
-			for _, tc := range assistant.ToolCalls {
-				var args struct {
-					Command string `json:"command"`
+			// Loop until the model produces a final (non-tool-call) response.
+			for {
+				assistant, usage, finishReason, err := streamAssistant(ctx, client, history)
+				if err != nil {
+					if ctx.Err() != nil {
+						// Interrupted: bail (we drop the whole session on Ctrl-C).
+						break outer
+					}
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					// remove failed user message
+					history = history[:len(history)-1]
+					break
 				}
-				if uErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); uErr != nil {
-					history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("error: invalid arguments: %v", uErr)})
-					continue
+				if assistant == nil {
+					if ctx.Err() != nil {
+						// Interrupted: bail (we drop the whole session on Ctrl-C).
+						break outer
+					}
+					fmt.Println("(empty response)")
+					history = history[:len(history)-1]
+					break
 				}
 
-				fmt.Printf("%srun_command>%s %s\n", colorYellow, colorReset, args.Command)
-				output, cmdErr := runShellCommand(args.Command)
-				if cmdErr != nil {
-					output = fmt.Sprintf("error: %v", cmdErr)
+				history = append(history, *assistant)
+				if usage != nil {
+					accumulateUsage(*usage, &totalPrompt, &totalCached, &totalCompletion)
 				}
-				fmt.Printf("%s   output>%s %s\n", colorYellow, colorReset, output)
 
-				history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
+				if finishReason != "tool_calls" {
+					break
+				}
+
+				// Execute each tool call and append results to history.
+				for _, tc := range assistant.ToolCalls {
+					var args struct {
+						Command string `json:"command"`
+					}
+					if uErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); uErr != nil {
+						history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("error: invalid arguments: %v", uErr)})
+						continue
+					}
+
+					fmt.Printf("%srun_command>%s %s\n", colorYellow, colorReset, args.Command)
+					output, cmdErr := runShellCommand(ctx, args.Command)
+					if ctx.Err() != nil {
+						break outer
+					}
+					if cmdErr != nil {
+						output = fmt.Sprintf("error: %v", cmdErr)
+					}
+					fmt.Printf("%s   output>%s %s\n", colorYellow, colorReset, output)
+
+					history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
+				}
 			}
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "read error: %v\n", err)
-	}
+	// Ensure any lingering operations are cancelled before we print the summary.
+	cancel()
+
 	fmt.Printf("\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n",
 		totalPrompt+totalCached+totalCompletion,
 		totalPrompt, totalCached, totalCompletion)
@@ -120,12 +178,12 @@ func main() {
 
 // streamAssistant streams the model's response, printing tokens live.
 // It returns the assembled assistant message, usage (if any), and finish reason.
-func streamAssistant(client *Client, history []Message) (*Message, *Usage, string, error) {
+func streamAssistant(ctx context.Context, client *Client, history []Message) (*Message, *Usage, string, error) {
 	// Show "waiting for response" the instant the request is sent.
 	update, stop := spinWithStatus("waiting for response")
 	defer stop() // clears the line on every exit path
 
-	stream, err := client.StreamChat(history)
+	stream, err := client.StreamChat(ctx, history)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -143,6 +201,13 @@ func streamAssistant(client *Client, history []Message) (*Message, *Usage, strin
 	printedPrefix := false
 
 	for {
+		// Bail out immediately if the user pressed Ctrl-C.
+		select {
+		case <-ctx.Done():
+			return nil, nil, "", ctx.Err()
+		default:
+		}
+
 		chunk, err := stream.Recv()
 		if err == io.EOF {
 			break
@@ -275,11 +340,13 @@ func accumulateUsage(u Usage, prompt, cached, completion *int) {
 	*completion += u.CompletionTokens
 }
 
-func runShellCommand(command string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func runShellCommand(ctx context.Context, command string) (string, error) {
+	// Derive a child context that inherits cancellation from the caller
+	// (e.g. Ctrl-C) but also enforces a hard 30s timeout per command.
+	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
 	out, err := cmd.CombinedOutput()
 	// trim trailing whitespace so output stays compact (no spurious blank lines)
 	return strings.TrimRight(string(out), "\n\t "), err
