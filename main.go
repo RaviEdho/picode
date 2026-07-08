@@ -60,30 +60,7 @@ func main() {
 
 		history = append(history, Message{Role: "user", Content: input})
 
-		// spinner while waiting
-		var wg sync.WaitGroup
-		done := make(chan struct{})
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			frames := []string{"|", "/", "-", "\\"}
-			i := 0
-			for {
-				fmt.Printf("\r%smodel>%s thinking %s", colorGreen, colorReset, frames[i%len(frames)])
-				i++
-				select {
-				case <-done:
-					return
-				case <-time.After(100 * time.Millisecond):
-				}
-			}
-		}()
-
-		resp, err := client.ChatCompletion(history)
-
-		close(done)
-		wg.Wait()
-		fmt.Print("\r" + strings.Repeat(" ", 60) + "\r") // clear spinner line
+		resp, err := chatWithSpinner(client, history)
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -130,7 +107,7 @@ func main() {
 			}
 
 			// Continue the conversation with tool results.
-			resp, err = client.ChatCompletion(history)
+			resp, err = chatWithSpinner(client, history)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				history = history[:len(history)-1]
@@ -142,10 +119,38 @@ func main() {
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "read error: %v\n", err)
 	}
-	fmt.Printf("\nsession ended [↑%d 🗘 %d ↓%d ∑%d]\n",
-		totalPrompt, totalCached, totalCompletion,
-		totalPrompt+totalCached+totalCompletion)
+	fmt.Printf("\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n",
+		totalPrompt+totalCached+totalCompletion,
+		totalPrompt, totalCached, totalCompletion)
 	fmt.Println()
+}
+
+func chatWithSpinner(client *Client, history []Message) (*ChatCompletionResponse, error) {
+	// show a spinner while waiting for the model to respond
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		frames := []string{"|", "/", "-", "\\"}
+		i := 0
+		for {
+			fmt.Printf("\r%smodel>%s thinking %s", colorGreen, colorReset, frames[i%len(frames)])
+			i++
+			select {
+			case <-done:
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+
+	resp, err := client.ChatCompletion(history)
+
+	close(done)
+	wg.Wait()
+	fmt.Print("\r" + strings.Repeat(" ", 60) + "\r") // clear spinner line
+	return resp, err
 }
 
 func accumulateUsage(resp *ChatCompletionResponse, prompt, cached, completion *int) {
