@@ -3,14 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -65,32 +62,7 @@ func main() {
 	defer cancel()
 
 	client := NewClient(*baseURL, *apiKey, *model)
-	_, _, shellSyntaxNote := shellInfo()
-	client.Tools = []Tool{{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "run_command",
-			Description: "Execute a shell command on the user's local machine and return " +
-				"its combined stdout/stderr. " + shellSyntaxNote + " Use it to inspect the " +
-				"filesystem, run builds/tests, query git, read files, or apply changes. There " +
-				"is a hard 30-second timeout per call; for long tasks use backgrounding " +
-				"(`cmd &`), output redirection, or poll in a later call. Output is trimmed " +
-				"of trailing whitespace. Prefer read-only investigative commands before making " +
-				"changes, and verify changes afterwards.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"command": map[string]any{
-						"type": "string",
-						"description": "The full shell command to execute (POSIX `sh` syntax). " +
-							"Chain with && or ; , pipe with |, and use 2>&1 to capture stderr. " +
-							"Example: `git status --short && rg -n 'TODO' --stats`.",
-					},
-				},
-				"required": []string{"command"},
-			},
-		},
-	}}
+	client.Tools = allTools()
 
 	// Read stdin in a goroutine so that Ctrl-C (which cancels ctx) can
 	// interrupt a blocking read on the prompt instead of leaving Scan()
@@ -192,28 +164,23 @@ outer:
 
 				// Execute each tool call and append results to history.
 				for _, tc := range assistant.ToolCalls {
-					var args struct {
-						Command string `json:"command"`
-					}
-					if uErr := json.Unmarshal([]byte(tc.Function.Arguments), &args); uErr != nil {
-						history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: fmt.Sprintf("error: invalid arguments: %v", uErr)})
-						continue
-					}
-
-					fmt.Printf("%srun_command>%s %s\n", colorYellow, colorReset, args.Command)
-					output, cmdErr := runShellCommand(ctx, args.Command)
+					cmd, output := executeToolCall(ctx, tc)
 					if ctx.Err() != nil {
+						// Interrupted mid-dispatch: bail (we drop the whole
+						// session on Ctrl-C).
 						break outer
 					}
-					if cmdErr != nil {
-						output = fmt.Sprintf("error: %v", cmdErr)
+					if cmd != "" {
+						fmt.Printf("%srun_command>%s %s\n", colorYellow, colorReset, cmd)
 					}
 					fmt.Printf("%s   output>%s %s\n", colorYellow, colorReset, output)
 
 					history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
 				}
+
 			}
 		}
+
 	}
 
 	// Ensure any lingering operations are cancelled before we print the summary.
@@ -387,20 +354,4 @@ func accumulateUsage(u Usage, prompt, cached, completion *int) {
 		*cached += u.PromptTokensDetails.CachedTokens
 	}
 	*completion += u.CompletionTokens
-}
-
-func runShellCommand(ctx context.Context, command string) (string, error) {
-	// Derive a child context that inherits cancellation from the caller
-	// (e.g. Ctrl-C) but also enforces a hard 30s timeout per command.
-	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	shell, shellFlag := "sh", "-c"
-	if runtime.GOOS == "windows" {
-		shell, shellFlag = "cmd", "/c"
-	}
-	cmd := exec.CommandContext(cmdCtx, shell, shellFlag, command)
-	out, err := cmd.CombinedOutput()
-	// trim trailing whitespace so output stays compact (no spurious blank lines)
-	return strings.TrimRight(string(out), "\n\t "), err
 }
