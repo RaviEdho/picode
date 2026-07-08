@@ -1,0 +1,57 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"time"
+)
+
+// friendlyOS maps runtime.GOOS to a human-friendly label.
+func friendlyOS() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "Windows"
+	case "linux":
+		return "Linux"
+	case "darwin":
+		return "macOS"
+	default:
+		return runtime.GOOS
+	}
+}
+
+// shellInfo returns the interpreter, the flag used to pass a command to it, and
+// a human-readable trailing hint describing the shell syntax the model should
+// use. The hint does NOT repeat the interpreter (callers compose "via `interp
+// flag`") so it reads cleanly in both the system prompt and the tool schema.
+func shellInfo() (interpreter, flag, syntaxHint string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", "/c",
+			"Use Windows Command Prompt syntax (e.g. `dir`, `copy`, `&&`, `> file`). " +
+				"For PowerShell prefix the command with `powershell -NoProfile -Command \"...\"`. " +
+				"Paths use backslashes and quoting uses double-quotes."
+	}
+	return "sh", "-c",
+		"Use POSIX shell syntax (&&, |, 2>&1, etc.)."
+}
+
+// buildEnvironmentBlock produces a short Markdown section describing the
+// runtime environment the model is operating in. It is captured once at
+// startup so the system message stays constant (and therefore cacheable)
+// for the whole session.
+func buildEnvironmentBlock() string {
+	interp, flag, syntaxHint := shellInfo()
+	shellPhrase := interp + " " + flag
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "(unknown)"
+	}
+	started := time.Now().Format("2006-01-02 15:04:05 (local)")
+	return fmt.Sprintf("# Environment (runtime)\n"+
+		"- OS: %s (%s)\n"+
+		"- Shell: commands run via `%s`. %s\n"+
+		"- Working directory: %s\n"+
+		"- Session started: %s",
+		friendlyOS(), runtime.GOARCH, shellPhrase, syntaxHint, wd, started)
+}

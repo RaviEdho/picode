@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,7 +30,33 @@ func main() {
 	baseURL := flag.String("base-url", "http://localhost:8080", "llama-server base URL")
 	apiKey := flag.String("api-key", "", "API key (empty for local)")
 	model := flag.String("model", "", "model name (empty = server default)")
+	systemFlag := flag.String("system", "", "system prompt text (overrides the built-in default)")
+	systemFileFlag := flag.String("system-file", "", "path to a file containing the system prompt")
+	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
+	showSystem := flag.Bool("show-system", false, "print the resolved system prompt at startup and exit")
 	flag.Parse()
+
+	// Resolve the system prompt according to the precedence implemented in
+	// resolveSystemPrompt (flags > env > built-in default).
+	systemText, systemOn := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
+	var systemMsg Message
+	if systemOn {
+		// Append the runtime environment block (OS/arch/shell/cwd/start time)
+		// once at startup so the whole system message stays constant for the
+		// session and the server can cache its prompt tokens.
+		systemText = systemText + "\n\n" + buildEnvironmentBlock()
+		systemMsg = Message{Role: "system", Content: systemText}
+	}
+
+	if *showSystem {
+		if systemOn {
+			fmt.Printf("--- system prompt (%d chars) ---\n%s\n--- end system prompt ---\n",
+				len(systemText), systemText)
+		} else {
+			fmt.Println("--- no system prompt (disabled) ---")
+		}
+		return
+	}
 
 	// Trap Ctrl-C (and SIGTERM) so the process is not killed with the
 	// default "signal: interrupt" behaviour. This lets us unwind cleanly
@@ -38,15 +65,29 @@ func main() {
 	defer cancel()
 
 	client := NewClient(*baseURL, *apiKey, *model)
+	_, _, shellSyntaxNote := shellInfo()
 	client.Tools = []Tool{{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "run_command",
-			Description: "Execute a shell command and return its stdout/stderr",
+			Name: "run_command",
+			Description: "Execute a shell command on the user's local machine and return " +
+				"its combined stdout/stderr. " + shellSyntaxNote + " Use it to inspect the " +
+				"filesystem, run builds/tests, query git, read files, or apply changes. There " +
+				"is a hard 30-second timeout per call; for long tasks use backgrounding " +
+				"(`cmd &`), output redirection, or poll in a later call. Output is trimmed " +
+				"of trailing whitespace. Prefer read-only investigative commands before making " +
+				"changes, and verify changes afterwards.",
 			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"command": map[string]any{"type": "string", "description": "The shell command to execute"}},
-				"required":   []string{"command"},
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{
+						"type": "string",
+						"description": "The full shell command to execute (POSIX `sh` syntax). " +
+							"Chain with && or ; , pipe with |, and use 2>&1 to capture stderr. " +
+							"Example: `git status --short && rg -n 'TODO' --stats`.",
+					},
+				},
+				"required": []string{"command"},
 			},
 		},
 	}}
@@ -111,7 +152,15 @@ outer:
 
 			// Loop until the model produces a final (non-tool-call) response.
 			for {
-				assistant, usage, finishReason, err := streamAssistant(ctx, client, history)
+				// Build the request message list fresh each turn: the (optional)
+				// system prompt first, then the visible user/assistant/tool history.
+				reqMessages := make([]Message, 0, len(history)+1)
+				if systemOn {
+					reqMessages = append(reqMessages, systemMsg)
+				}
+				reqMessages = append(reqMessages, history...)
+
+				assistant, usage, finishReason, err := streamAssistant(ctx, client, reqMessages)
 				if err != nil {
 					if ctx.Err() != nil {
 						// Interrupted: bail (we drop the whole session on Ctrl-C).
@@ -346,7 +395,11 @@ func runShellCommand(ctx context.Context, command string) (string, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command)
+	shell, shellFlag := "sh", "-c"
+	if runtime.GOOS == "windows" {
+		shell, shellFlag = "cmd", "/c"
+	}
+	cmd := exec.CommandContext(cmdCtx, shell, shellFlag, command)
 	out, err := cmd.CombinedOutput()
 	// trim trailing whitespace so output stays compact (no spurious blank lines)
 	return strings.TrimRight(string(out), "\n\t "), err
