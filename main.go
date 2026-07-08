@@ -167,5 +167,6 @@ func runShellCommand(command string) (string, error) {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	out, err := cmd.CombinedOutput()
-	return string(out), err
+	// trim trailing whitespace so output stays compact (no spurious blank lines)
+	return strings.TrimRight(string(out), "\n\t "), err
 }
