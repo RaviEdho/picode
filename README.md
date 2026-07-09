@@ -80,12 +80,9 @@ The model has access to `run_command` — a shell tool that executes commands on
 
 Exit with `exit`, `quit`, or `Ctrl-D`. On exit, a token summary is printed:
 
-| Symbol | Meaning |
-|--------|---------|
-| `↑` | Prompt tokens sent |
-| `🗘` | Cached tokens |
-| `↓` | Completion tokens received |
-| `∑` | Total |
+```
+session ended - 1234 tokens total, 1000 sent (+500 cached), 234 received
+```
 
 ## Requirements
 
