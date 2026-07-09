@@ -149,6 +149,7 @@ outer:
 				break outer
 			}
 
+			turnStart := len(history)
 			history = append(history, Message{Role: "user", Content: input})
 
 			// Loop until the model produces a final (non-tool-call) response.
@@ -168,8 +169,8 @@ outer:
 						break outer
 					}
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-					// remove failed user message
-					history = history[:len(history)-1]
+					// rollback entire turn so history stays structurally valid
+					history = history[:turnStart]
 					break
 				}
 				if assistant == nil {
@@ -178,7 +179,7 @@ outer:
 						break outer
 					}
 					fmt.Println("(empty response)")
-					history = history[:len(history)-1]
+					history = history[:turnStart]
 					break
 				}
 
