@@ -28,7 +28,6 @@ go run .
 | `-system` | *(empty)* | Inline system prompt text (overrides the built-in default) |
 | `-system-file` | *(empty)* | Path to a file containing the system prompt |
 | `-no-system` | `false` | Send **no** system message (original harness behaviour) |
-| `-show-system` | `false` | Print the resolved system prompt at startup and exit |
 
 ## System prompt
 
@@ -42,9 +41,6 @@ prompt is resolved by the following precedence (highest first):
 4. `PICODE_SYSTEM_FILE` environment variable
 5. Built-in default prompt (see `system.go`)
 
-Pass `-no-system` to disable the system message entirely (the harness's original
-behaviour). Use `-show-system` to print the resolved prompt and exit — handy for
-inspecting or tuning it.
 
 The default prompt teaches the model about the 30-second tool timeout, a
 read-only-first workflow, verification after changes, and safe handling of

@@ -30,7 +30,6 @@ func main() {
 	systemFlag := flag.String("system", "", "system prompt text (overrides the built-in default)")
 	systemFileFlag := flag.String("system-file", "", "path to a file containing the system prompt")
 	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
-	showSystem := flag.Bool("show-system", false, "print the resolved system prompt at startup and exit")
 	flag.Parse()
 
 	// Resolve the system prompt according to the precedence implemented in
@@ -45,15 +44,6 @@ func main() {
 		systemMsg = Message{Role: "system", Content: systemText}
 	}
 
-	if *showSystem {
-		if systemOn {
-			fmt.Printf("--- system prompt (%d chars) ---\n%s\n--- end system prompt ---\n",
-				len(systemText), systemText)
-		} else {
-			fmt.Println("--- no system prompt (disabled) ---")
-		}
-		return
-	}
 
 	// Session context: cancelled only when the user requests exit (or a fatal
 	// interrupt while idle). We manage Ctrl-C manually below so that a Ctrl-C
