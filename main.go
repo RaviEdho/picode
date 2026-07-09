@@ -209,7 +209,9 @@ outer:
 						// bail out, dropping the rest of the turn.
 						break outer
 					}
-					fmt.Printf("%s   output>%s %s\n", colorYellow, colorReset, output)
+					fmt.Printf("%s   output>%s ", colorYellow, colorReset)
+					printTruncated(output, 5, colorFaded)
+					fmt.Println()
 
 					history = append(history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
 				}
@@ -519,4 +521,20 @@ func unescapeJSONString(s string) string {
 		i++ // skip the escaped character
 	}
 	return b.String()
+}
+
+// printTruncated prints up to limit lines from the output, in the given color.
+// If output has more than limit lines, it appends a "(... N more lines)" note.
+func printTruncated(output string, limit int, color string) {
+	lines := strings.Split(output, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= limit {
+		fmt.Print(color, output, colorReset)
+		return
+	}
+	shown := strings.Join(lines[:limit], "\n")
+	remaining := len(lines) - limit
+	fmt.Print(color, shown, "\n(... ", remaining, " more lines)", colorReset)
 }
