@@ -223,8 +223,8 @@ outer:
 	cancel()
 
 	fmt.Printf("\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n",
-		totalPrompt+totalCached+totalCompletion,
-		totalPrompt, totalCached, totalCompletion)
+		totalPrompt+totalCompletion,
+		totalPrompt-totalCached, totalCached, totalCompletion)
 	fmt.Println()
 	if logger != nil {
 		logger.LogEvent("session ended")
