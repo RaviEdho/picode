@@ -81,6 +81,9 @@ func executeToolCall(ctx context.Context, tc ToolCall) (cmd string, output strin
 		if err != nil {
 			out = fmt.Sprintf("error: %v", err)
 		}
+		if out == "" {
+			out = "(no output)"
+		}
 		return args.Command, out
 	default:
 		return "", fmt.Sprintf("error: unknown tool: %s", tc.Function.Name)
