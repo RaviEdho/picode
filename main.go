@@ -351,6 +351,18 @@ func streamAssistant(ctx context.Context, client *Client, history []Message) (*M
 		return nil, usage, finish, nil
 	}
 
+	// Many OpenAI-compatible servers omit delta.role on tool-only turns and/or
+	// omit tool_calls[].type after the first chunk. Replay requires a valid
+	// assistant message or the next request is rejected (HTTP 400).
+	if role == "" {
+		role = "assistant"
+	}
+	for i := range toolCalls {
+		if toolCalls[i].Type == "" {
+			toolCalls[i].Type = "function"
+		}
+	}
+
 	msg := &Message{Role: role, Content: content.String()}
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = toolCalls
