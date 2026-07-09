@@ -192,7 +192,7 @@ outer:
 					// this command (via currentCommandCancel) without ending the
 					// session. It still inherits ctx, so a session exit also cancels.
 					cmdCtx, cmdCancel := context.WithCancel(ctx)
-					cmd, output := executeToolCall(cmdCtx, tc)
+					_, output := executeToolCall(cmdCtx, tc)
 					cmdCancel()
 
 					if strings.Contains(output, "command cancelled by user") {
@@ -202,9 +202,6 @@ outer:
 						// Session itself was cancelled (e.g. Ctrl-C at idle prompt):
 						// bail out, dropping the rest of the turn.
 						break outer
-					}
-					if cmd != "" {
-						fmt.Printf("%srun_command>%s %s\n", colorYellow, colorReset, cmd)
 					}
 					fmt.Printf("%s   output>%s %s\n", colorYellow, colorReset, output)
 
@@ -248,6 +245,8 @@ func streamAssistant(ctx context.Context, client *Client, history []Message) (*M
 
 	gotFirstChunk := false
 	printedPrefix := false
+	printedToolPrefix := make(map[int]bool)
+	printedCmdLen := make(map[int]int) // tracks how many chars of the parsed command have been printed per tool call
 
 	for {
 		// Bail out immediately if the user pressed Ctrl-C.
@@ -297,10 +296,20 @@ func streamAssistant(ctx context.Context, client *Client, history []Message) (*M
 			content.WriteString(d.Content)
 		}
 		for _, tc := range d.ToolCalls {
-			// Tool call: clear the placeholder; no "model> " text to print.
+			// Tool call: clear the placeholder and stream the tool
+			// name + arguments live so the user sees immediate feedback.
 			stop()
 			for len(toolCalls) <= tc.Index {
 				toolCalls = append(toolCalls, ToolCall{})
+			}
+			// Print prefix on first chunk for this tool call index.
+			if !printedToolPrefix[tc.Index] {
+				printedToolPrefix[tc.Index] = true
+				// Newline if text content or a previous tool call line was open.
+				if printedPrefix || tc.Index > 0 {
+					fmt.Println()
+				}
+				fmt.Printf("%srun_command>%s ", colorYellow, colorReset)
 			}
 			cur := &toolCalls[tc.Index]
 			if tc.ID != "" {
@@ -311,8 +320,28 @@ func streamAssistant(ctx context.Context, client *Client, history []Message) (*M
 			}
 			if tc.Function.Name != "" {
 				cur.Function.Name = tc.Function.Name
+				// Name already shown in the "run_command> " prefix.
 			}
-			cur.Function.Arguments += tc.Function.Arguments
+			if tc.Function.Arguments != "" {
+				cur.Function.Arguments += tc.Function.Arguments
+				raw := extractCommandValue(cur.Function.Arguments)
+				cmd := unescapeJSONString(raw)
+				// If the raw value ends with an odd number of backslashes,
+				// the last escape sequence is still incomplete — withhold
+				// the trailing character until the next chunk completes it.
+				trailing := 0
+				for i := len(raw) - 1; i >= 0 && raw[i] == '\\'; i-- {
+					trailing++
+				}
+				display := cmd
+				if trailing%2 == 1 && len(cmd) > 0 {
+					display = cmd[:len(cmd)-1]
+				}
+				if len(display) > printedCmdLen[tc.Index] {
+					fmt.Print(display[printedCmdLen[tc.Index]:])
+					printedCmdLen[tc.Index] = len(display)
+				}
+			}
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage
@@ -321,6 +350,9 @@ func streamAssistant(ctx context.Context, client *Client, history []Message) (*M
 
 	if printedPrefix {
 		fmt.Println() // newline after streamed text
+	}
+	if len(printedToolPrefix) > 0 {
+		fmt.Println() // newline after streamed tool call line
 	}
 
 	// Nothing produced (empty stream / no choices): return nil so the
@@ -387,4 +419,82 @@ func accumulateUsage(u Usage, prompt, cached, completion *int) {
 		*cached += u.PromptTokensDetails.CachedTokens
 	}
 	*completion += u.CompletionTokens
+}
+
+// extractCommandValue extracts the command string value from a (possibly
+// partial) JSON arguments blob like {"command": "echo hello"}. It returns the
+// raw JSON string content (still with escapes like \" and \\) up to the first
+// unescaped closing quote, or everything after the opening quote if the closing
+// quote hasn't arrived yet (streaming in progress).
+func extractCommandValue(args string) string {
+	idx := strings.Index(args, `"command"`)
+	if idx < 0 {
+		return ""
+	}
+	rest := args[idx+len(`"command"`):]
+	rest = strings.TrimLeft(rest, " \t\r\n")
+	if !strings.HasPrefix(rest, ":") {
+		return ""
+	}
+	rest = rest[1:]
+	rest = strings.TrimLeft(rest, " \t\r\n")
+	if len(rest) == 0 || rest[0] != '"' {
+		return ""
+	}
+	rest = rest[1:] // skip opening "
+	// Scan for the closing unescaped ".
+	escaped := false
+	for i, c := range rest {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			return rest[:i]
+		}
+	}
+	return rest // still streaming
+}
+
+// unescapeJSONString converts a raw JSON string value (without surrounding
+// quotes) into a Go string, handling the standard JSON escape sequences.
+func unescapeJSONString(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		switch s[i+1] {
+		case '"':
+			b.WriteByte('"')
+		case '\\':
+			b.WriteByte('\\')
+		case '/':
+			b.WriteByte('/')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'b':
+			b.WriteByte('\b')
+		case 'f':
+			b.WriteByte('\f')
+		default:
+			b.WriteByte(s[i])
+			b.WriteByte(s[i+1])
+		}
+		i++ // skip the escaped character
+	}
+	return b.String()
 }
