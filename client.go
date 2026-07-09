@@ -18,6 +18,7 @@ type Client struct {
 	Model      string
 	Tools      []Tool
 	HTTPClient *http.Client
+	Logger     *RequestLogger // nil when logging is disabled
 }
 
 func NewClient(baseURL, apiKey, model string) *Client {
@@ -96,6 +97,9 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	// ── Log the full outgoing request ──
+	c.Logger.LogRequest(body)
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -114,7 +118,10 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		var buf bytes.Buffer
 		buf.ReadFrom(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, buf.String())
+		errBody := buf.String()
+		// ── Log non-200 responses ──
+		c.Logger.LogResponseError(resp.StatusCode, errBody)
+		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, errBody)
 	}
 
 	ct := resp.Header.Get("Content-Type")

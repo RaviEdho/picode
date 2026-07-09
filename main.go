@@ -30,7 +30,18 @@ func main() {
 	systemFlag := flag.String("system", "", "system prompt text (overrides the built-in default)")
 	systemFileFlag := flag.String("system-file", "", "path to a file containing the system prompt")
 	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
+	logSession := flag.Bool("log", false, "log full request JSON to stderr and ~/.picode/logs/<timestamp>.log")
 	flag.Parse()
+
+	// Initialize request logger if --log was set.
+	var logger *RequestLogger
+	if *logSession {
+		var err error
+		logger, err = NewRequestLogger()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not create log file: %v\n", err)
+		}
+	}
 
 	// Resolve the system prompt according to the precedence implemented in
 	// resolveSystemPrompt (flags > env > built-in default).
@@ -76,6 +87,7 @@ func main() {
 	}()
 
 	client := NewClient(*baseURL, *apiKey, *model)
+	client.Logger = logger
 	client.Tools = allTools()
 
 	// Read stdin in a goroutine so that Ctrl-C (which cancels ctx) can
@@ -115,6 +127,9 @@ func main() {
 	var totalPrompt, totalCached, totalCompletion int
 
 	fmt.Println("picode — type 'exit' or Ctrl-D to quit")
+	if logger != nil {
+		logger.LogEvent("session started")
+	}
 
 outer:
 	for {
@@ -182,7 +197,8 @@ outer:
 					// this command (via currentCommandCancel) without ending the
 					// session. It still inherits ctx, so a session exit also cancels.
 					cmdCtx, cmdCancel := context.WithCancel(ctx)
-					_, output := executeToolCall(cmdCtx, tc)
+					cmd, output := executeToolCall(cmdCtx, tc)
+					logger.LogEvent(fmt.Sprintf("tool %s: cmd=%q output=(%d bytes)", tc.Function.Name, cmd, len(output)))
 					cmdCancel()
 
 					if strings.Contains(output, "command cancelled by user") {
@@ -210,6 +226,10 @@ outer:
 		totalPrompt+totalCached+totalCompletion,
 		totalPrompt, totalCached, totalCompletion)
 	fmt.Println()
+	if logger != nil {
+		logger.LogEvent("session ended")
+		logger.Close()
+	}
 }
 
 // streamAssistant streams the model's response, printing tokens live.
