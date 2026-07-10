@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -98,21 +97,21 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) e
 
 		// Send each tool result back to the model before continuing.
 		for _, tc := range assistant.ToolCalls {
-			command, output := s.executor.Execute(ctx, tc)
-			s.logger.LogEvent(fmt.Sprintf("tool %s: cmd=%q output=(%d bytes)", tc.Function.Name, command, len(output)))
+			result := s.executor.Execute(ctx, tc)
+			s.logger.LogEvent(fmt.Sprintf("tool %s: cmd=%q status=%s output=(%d bytes)",
+				tc.Function.Name, result.Command, result.Status, len(result.Output)))
 
-			cancelled := strings.Contains(output, "command cancelled by user")
 			events.Emit(ToolResultEvent{
-				Name:      tc.Function.Name,
-				Command:   command,
-				Output:    output,
-				Cancelled: cancelled,
+				Name:    tc.Function.Name,
+				Command: result.Command,
+				Output:  result.Output,
+				Status:  result.Status,
 			})
 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			s.history = append(s.history, Message{Role: "tool", ToolCallID: tc.ID, Content: output})
+			s.history = append(s.history, Message{Role: "tool", ToolCallID: tc.ID, Content: result.Output})
 		}
 	}
 }

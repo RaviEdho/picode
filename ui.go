@@ -43,10 +43,10 @@ type ToolCallUpdateEvent struct {
 
 // ToolResultEvent carries completed command output.
 type ToolResultEvent struct {
-	Name      string
-	Command   string
-	Output    string
-	Cancelled bool
+	Name    string
+	Command string
+	Output  string
+	Status  ToolStatus
 }
 
 // StreamFinishedEvent closes the active streamed response.

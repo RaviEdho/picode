@@ -58,16 +58,17 @@ func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
-	// Ctrl-C cancels an active tool; otherwise it exits the session.
+	// Ctrl-C cancels an active tool; SIGTERM always exits the session.
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-sigCh:
-				if !session.CancelActiveTool() {
-					cancel()
+			case sig := <-sigCh:
+				if sig == os.Interrupt && session.CancelActiveTool() {
+					continue
 				}
+				cancel()
 			}
 		}
 	}()
@@ -172,7 +173,7 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		ui.textOpen = false
 		ui.toolOpen = false
 	case ToolResultEvent:
-		if event.Cancelled {
+		if event.Status == ToolCancelled {
 			fmt.Fprintf(ui.out, "%s^C cancelled run_command%s\n", colorYellow, colorReset)
 		}
 		fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
