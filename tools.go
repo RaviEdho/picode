@@ -10,26 +10,26 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// commandRunning indicates whether a shell command is currently executing.
-// main.go's signal handler consults it (under commandMu) to decide whether a
-// Ctrl-C should cancel the running command or quit the whole session.
-var commandRunning atomic.Bool
+type ToolExecutor struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+}
 
-// currentCommandCancel holds the cancel func for the command in flight, or nil
-// when no command is running. Guarded by commandMu. main.go's signal handler
-// invokes it to cancel a single command on Ctrl-C without ending the session.
-var (
-	commandMu            sync.Mutex
-	currentCommandCancel context.CancelFunc
-)
+func NewToolExecutor() *ToolExecutor { return &ToolExecutor{} }
 
-// runCommandTool returns the Tool definition for the run_command shell tool.
-// Its description is OS-aware (built from shellInfo) so the model is told to
-// use CMD/PowerShell on Windows and POSIX shell elsewhere.
+func (e *ToolExecutor) CancelActive() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.cancel == nil {
+		return false
+	}
+	e.cancel()
+	return true
+}
+
 func runCommandTool() Tool {
 	_, _, shellSyntaxNote := shellInfo()
 	return Tool{
@@ -57,17 +57,11 @@ func runCommandTool() Tool {
 	}
 }
 
-// allTools returns the full set of tools the model may call. Register new
-// tools here in one place; main.go simply assigns this to client.Tools.
 func allTools() []Tool {
 	return []Tool{runCommandTool()}
 }
 
-// executeToolCall runs a single tool call and returns the command that was
-// (attempted to be) executed and its output text. Parse/execution failures are
-// returned as the output string (not as a Go error) so they can be fed back
-// to the model as a normal tool result, matching the harness's original behavior.
-func executeToolCall(ctx context.Context, tc ToolCall) (cmd string, output string) {
+func (e *ToolExecutor) Execute(ctx context.Context, tc ToolCall) (cmd string, output string) {
 	switch tc.Function.Name {
 	case "run_command":
 		var args struct {
@@ -76,7 +70,7 @@ func executeToolCall(ctx context.Context, tc ToolCall) (cmd string, output strin
 		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 			return "", fmt.Sprintf("error: invalid arguments: %v", err)
 		}
-		out, err := runShellCommand(ctx, args.Command)
+		out, err := e.runShellCommand(ctx, args.Command)
 		if err != nil {
 			out = fmt.Sprintf("error: %v", err)
 		}
@@ -89,32 +83,21 @@ func executeToolCall(ctx context.Context, tc ToolCall) (cmd string, output strin
 	}
 }
 
-// runShellCommand executes command in the platform shell (sh -c on POSIX,
-// cmd /c on Windows). The shell and everything it spawns are placed in a
-// dedicated process group so a cancellation or the hard 30s timeout can kill
-// the entire tree — not just the direct sh -c child — which is what previously
-// let runaway looping grandchildren survive. Combined stdout/stderr is streamed
-// into a buffer so output is captured even when we interrupt the process.
-func runShellCommand(ctx context.Context, command string) (string, error) {
-	// Base context carries the hard 30s timeout and inherits caller
-	// cancellation (e.g. session teardown). A wrapping cancellable context lets
-	// a manual Ctrl-C cancel this specific command without ending the session.
+func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (string, error) {
 	baseCtx, timeoutCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer timeoutCancel()
 
 	cmdCtx, cmdCancel := context.WithCancel(baseCtx)
 
-	commandMu.Lock()
-	currentCommandCancel = cmdCancel
-	commandRunning.Store(true)
-	commandMu.Unlock()
+	e.mu.Lock()
+	e.cancel = cmdCancel
+	e.mu.Unlock()
 
 	defer func() {
 		cmdCancel()
-		commandMu.Lock()
-		currentCommandCancel = nil
-		commandRunning.Store(false)
-		commandMu.Unlock()
+		e.mu.Lock()
+		e.cancel = nil
+		e.mu.Unlock()
 	}()
 
 	shell, shellFlag := "sh", "-c"
@@ -123,12 +106,8 @@ func runShellCommand(ctx context.Context, command string) (string, error) {
 	}
 
 	cmd := exec.CommandContext(cmdCtx, shell, shellFlag, command)
-	// Spawn in a fresh process group so a cancellation/timeout can kill the
-	// entire tree (the real runaway loop is usually a grandchild of sh -c).
 	cmd.SysProcAttr = sysProcAttrNewProcessGroup()
 
-	// Capture combined stdout/stderr ourselves; CombinedOutput would block
-	// until exit, preventing a timely reaction to cancellation.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -152,12 +131,8 @@ func runShellCommand(ctx context.Context, command string) (string, error) {
 	select {
 	case err = <-waitCh:
 		<-copyDone
-		// trim trailing whitespace so output stays compact (no spurious blank lines)
 		return strings.TrimRight(buf.String(), "\n\t "), err
 	case <-cmdCtx.Done():
-		// Cancel or timeout: destroy the whole process group so any
-		// grandchildren (the actual runaway loop) are killed too. SIGKILL
-		// cannot be trapped, so this reliably stops the loop.
 		killProcessGroup(cmd.Process.Pid)
 		<-waitCh
 		<-copyDone

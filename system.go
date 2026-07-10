@@ -44,53 +44,54 @@ user's files using the available shell tool.
 
 Trust the supplied runtime environment details over assumptions.`
 
-// resolveSystemPrompt determines the system prompt to use, by the following
-// precedence (highest first):
-//  1. -system flag (inline text)
-//  2. -system-file flag (path to a file)
-//  3. PICODE_SYSTEM environment variable
-//  4. PICODE_SYSTEM_FILE environment variable
-//  5. built-in defaultSystemPrompt
-//
-// If -no-system is set, enabled is false, signalling that no system message
-// should be sent. An unreadable explicit -system-file is returned as an error;
-// environment-variable file failures warn and fall back to the built-in prompt.
-func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (string, bool, error) {
+type PromptResolution struct {
+	Text     string
+	Enabled  bool
+	Warnings []string
+}
+
+func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (PromptResolution, error) {
 	if noSystem {
-		return "", false, nil
+		return PromptResolution{}, nil
 	}
 
-	if v := strings.TrimSpace(systemFlag); v != "" {
-		return v, true, nil
+	if value := strings.TrimSpace(systemFlag); value != "" {
+		return PromptResolution{Text: value, Enabled: true}, nil
 	}
-	if v := strings.TrimSpace(systemFileFlag); v != "" {
-		text, err := readPromptFile(v)
+	if path := strings.TrimSpace(systemFileFlag); path != "" {
+		text, err := readPromptFile(path)
 		if err != nil {
-			return "", false, fmt.Errorf("could not read -system-file %q: %w", v, err)
+			return PromptResolution{}, fmt.Errorf("could not read -system-file %q: %w", path, err)
 		}
 		if text == "" {
-			fmt.Fprintf(os.Stderr, "warning: -system-file %q is empty; using the built-in prompt\n", v)
-			return defaultSystemPrompt, true, nil
+			return PromptResolution{
+				Text: defaultSystemPrompt, Enabled: true,
+				Warnings: []string{fmt.Sprintf("-system-file %q is empty; using the built-in prompt", path)},
+			}, nil
 		}
-		return text, true, nil
+		return PromptResolution{Text: text, Enabled: true}, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("PICODE_SYSTEM")); v != "" {
-		return v, true, nil
+	if value := strings.TrimSpace(os.Getenv("PICODE_SYSTEM")); value != "" {
+		return PromptResolution{Text: value, Enabled: true}, nil
 	}
-	if v := strings.TrimSpace(os.Getenv("PICODE_SYSTEM_FILE")); v != "" {
-		text, err := readPromptFile(v)
+	if path := strings.TrimSpace(os.Getenv("PICODE_SYSTEM_FILE")); path != "" {
+		text, err := readPromptFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read PICODE_SYSTEM_FILE %q: %v; using the built-in prompt\n", v, err)
-			return defaultSystemPrompt, true, nil
+			return PromptResolution{
+				Text: defaultSystemPrompt, Enabled: true,
+				Warnings: []string{fmt.Sprintf("could not read PICODE_SYSTEM_FILE %q: %v; using the built-in prompt", path, err)},
+			}, nil
 		}
 		if text == "" {
-			fmt.Fprintf(os.Stderr, "warning: PICODE_SYSTEM_FILE %q is empty; using the built-in prompt\n", v)
-			return defaultSystemPrompt, true, nil
+			return PromptResolution{
+				Text: defaultSystemPrompt, Enabled: true,
+				Warnings: []string{fmt.Sprintf("PICODE_SYSTEM_FILE %q is empty; using the built-in prompt", path)},
+			}, nil
 		}
-		return text, true, nil
+		return PromptResolution{Text: text, Enabled: true}, nil
 	}
 
-	return defaultSystemPrompt, true, nil
+	return PromptResolution{Text: defaultSystemPrompt, Enabled: true}, nil
 }
 
 func readPromptFile(path string) (string, error) {
