@@ -47,9 +47,8 @@ func runCommandTool() Tool {
 				"type": "object",
 				"properties": map[string]any{
 					"command": map[string]any{
-						"type": "string",
-						"description": "The full shell command to execute. " +
-							"Chain with && or ; , pipe with |, and use 2>&1 to capture stderr.",
+						"type":        "string",
+						"description": shellCommandDescription(),
 					},
 				},
 				"required": []string{"command"},

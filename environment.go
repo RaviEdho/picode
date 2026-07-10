@@ -36,10 +36,21 @@ func shellInfo() (interpreter, flag, syntaxHint string) {
 		"Use POSIX shell syntax (&&, |, 2>&1, etc.)."
 }
 
+// shellCommandDescription returns OS-appropriate guidance for the command
+// argument in the run_command tool schema.
+func shellCommandDescription() string {
+	if runtime.GOOS == "windows" {
+		return "The complete Command Prompt command to execute. Chain commands with &&, " +
+			"pipe with |, and use 2>&1 to capture stderr."
+	}
+	return "The full shell command to execute. Chain with && or ;, pipe with |, " +
+		"and use 2>&1 to capture stderr."
+}
+
 // buildEnvironmentBlock produces a short Markdown section describing the
-// runtime environment the model is operating in. It is captured once at
-// startup so the system message stays constant (and therefore cacheable)
-// for the whole session.
+// runtime environment. It is captured once at startup. The date changes only
+// once per day, which permits substantially more cross-session prompt caching
+// than a session timestamp.
 func buildEnvironmentBlock() string {
 	interp, flag, syntaxHint := shellInfo()
 	shellPhrase := interp + " " + flag
@@ -47,11 +58,11 @@ func buildEnvironmentBlock() string {
 	if err != nil {
 		wd = "(unknown)"
 	}
-	started := time.Now().Format("2006-01-02 15:04:05 (local)")
-	return fmt.Sprintf("# Environment (runtime)\n"+
-		"- OS: %s (%s)\n"+
+	currentDate := time.Now().Format("2006-01-02")
+	return fmt.Sprintf("# Runtime environment\n"+
+		"- Platform: %s/%s\n"+
 		"- Shell: commands run via `%s`. %s\n"+
-		"- Working directory: %s\n"+
-		"- Session started: %s",
-		friendlyOS(), runtime.GOARCH, shellPhrase, syntaxHint, wd, started)
+		"- Working directory: %q\n"+
+		"- Current date: %s",
+		friendlyOS(), runtime.GOARCH, shellPhrase, syntaxHint, wd, currentDate)
 }

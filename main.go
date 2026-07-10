@@ -30,8 +30,17 @@ func main() {
 	systemFlag := flag.String("system", "", "system prompt text (overrides the built-in default)")
 	systemFileFlag := flag.String("system-file", "", "path to a file containing the system prompt")
 	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
+	noEnvironment := flag.Bool("no-environment", false, "do not append runtime environment details to the system prompt")
 	logSession := flag.Bool("log", false, "log full request JSON to stderr and ~/.picode/logs/<timestamp>.log")
 	flag.Parse()
+
+	// Resolve before creating other session resources. An explicitly requested
+	// prompt file is configuration, so an unreadable one is a startup error.
+	systemText, systemOn, err := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize request logger if --log was set.
 	var logger *RequestLogger
@@ -43,18 +52,15 @@ func main() {
 		}
 	}
 
-	// Resolve the system prompt according to the precedence implemented in
-	// resolveSystemPrompt (flags > env > built-in default).
-	systemText, systemOn := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
 	var systemMsg Message
 	if systemOn {
-		// Append the runtime environment block (OS/arch/shell/cwd/start time)
-		// once at startup so the whole system message stays constant for the
-		// session and the server can cache its prompt tokens.
-		systemText = systemText + "\n\n" + buildEnvironmentBlock()
+		// Capture runtime details once so the system message remains constant
+		// throughout the session and its tokens remain cacheable.
+		if !*noEnvironment {
+			systemText = systemText + "\n\n" + buildEnvironmentBlock()
+		}
 		systemMsg = Message{Role: "system", Content: systemText}
 	}
-
 
 	// Session context: cancelled only when the user requests exit (or a fatal
 	// interrupt while idle). We manage Ctrl-C manually below so that a Ctrl-C

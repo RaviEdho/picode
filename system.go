@@ -24,12 +24,13 @@ user's files using the available shell tool.
 - Combine independent inspections when practical. Prefer targeted commands and
   bounded output over broad searches or full file dumps.
 - Before editing, understand the relevant code. After editing, run the smallest
-  useful verification, then inspect the resulting diff.
+  useful verification.
+- Preserve unrelated user changes. When Git is available, inspect repository
+  status before editing and review the final diff afterward.
 - On failure, diagnose from the output and adapt. Do not blindly repeat commands.
-- Never perform destructive or irreversible actions, overwrite unrelated work,
-  change system configuration, expose secrets, or commit/push without explicit
-  permission.
-- Respect .gitignore and existing repository conventions.
+- Never perform destructive or irreversible actions, modify system configuration,
+  expose secrets, or commit/push without explicit permission.
+- Respect existing repository conventions, including ignore files.
 - Commands have a 30-second timeout. Use background execution and polling only
   when necessary.
 
@@ -51,35 +52,51 @@ Trust the supplied runtime environment details over assumptions.`
 //  4. PICODE_SYSTEM_FILE environment variable
 //  5. built-in defaultSystemPrompt
 //
-// If -no-system is set, it returns ("", false), signalling that NO system
-// message should be sent (preserving the harness's original behaviour).
-func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (string, bool) {
+// If -no-system is set, enabled is false, signalling that no system message
+// should be sent. An unreadable explicit -system-file is returned as an error;
+// environment-variable file failures warn and fall back to the built-in prompt.
+func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (string, bool, error) {
 	if noSystem {
-		return "", false
+		return "", false, nil
 	}
 
 	if v := strings.TrimSpace(systemFlag); v != "" {
-		return v, true
+		return v, true, nil
 	}
 	if v := strings.TrimSpace(systemFileFlag); v != "" {
-		data, err := os.ReadFile(v)
+		text, err := readPromptFile(v)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read -system-file %q: %v\n", v, err)
-			return defaultSystemPrompt, true
+			return "", false, fmt.Errorf("could not read -system-file %q: %w", v, err)
 		}
-		return strings.TrimSpace(string(data)), true
+		if text == "" {
+			fmt.Fprintf(os.Stderr, "warning: -system-file %q is empty; using the built-in prompt\n", v)
+			return defaultSystemPrompt, true, nil
+		}
+		return text, true, nil
 	}
 	if v := strings.TrimSpace(os.Getenv("PICODE_SYSTEM")); v != "" {
-		return v, true
+		return v, true, nil
 	}
 	if v := strings.TrimSpace(os.Getenv("PICODE_SYSTEM_FILE")); v != "" {
-		data, err := os.ReadFile(v)
+		text, err := readPromptFile(v)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read PICODE_SYSTEM_FILE %q: %v\n", v, err)
-			return defaultSystemPrompt, true
+			fmt.Fprintf(os.Stderr, "warning: could not read PICODE_SYSTEM_FILE %q: %v; using the built-in prompt\n", v, err)
+			return defaultSystemPrompt, true, nil
 		}
-		return strings.TrimSpace(string(data)), true
+		if text == "" {
+			fmt.Fprintf(os.Stderr, "warning: PICODE_SYSTEM_FILE %q is empty; using the built-in prompt\n", v)
+			return defaultSystemPrompt, true, nil
+		}
+		return text, true, nil
 	}
 
-	return defaultSystemPrompt, true
+	return defaultSystemPrompt, true, nil
+}
+
+func readPromptFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }

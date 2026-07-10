@@ -28,6 +28,7 @@ go run .
 | `-system` | *(empty)* | Inline system prompt text (overrides the built-in default) |
 | `-system-file` | *(empty)* | Path to a file containing the system prompt |
 | `-no-system` | `false` | Send **no** system message (original harness behaviour) |
+| `-no-environment` | `false` | Do not append runtime details to the system prompt |
 
 ## System prompt
 
@@ -41,6 +42,9 @@ prompt is resolved by the following precedence (highest first):
 4. `PICODE_SYSTEM_FILE` environment variable
 5. Built-in default prompt (see `system.go`)
 
+An unreadable file passed explicitly with `-system-file` is a startup error. An
+unreadable `PICODE_SYSTEM_FILE`, or an empty prompt file from either source,
+produces a warning and falls back to the built-in prompt.
 
 The default prompt teaches the model about the 30-second tool timeout, a
 read-only-first workflow, verification after changes, and safe handling of
@@ -52,16 +56,18 @@ destructive commands. Edit `defaultSystemPrompt` in `system.go` to customise it.
 
 ## Runtime environment awareness
 
-At startup `picode` appends an `Environment (runtime)` section to the system prompt so
-the model knows the real platform it is operating on. This block contains:
+At startup `picode` appends a `Runtime environment` section to the system prompt,
+including custom prompts, so the model knows the real platform it is operating on.
+This block contains:
 
-- **OS** (e.g. `Linux`, `Windows`, `macOS`) and **architecture** (`amd64`, `arm64`, …)
+- **Platform** — OS (e.g. `Linux`, `Windows`, `macOS`) and architecture
 - **Shell / interpreter** — `sh -c` on POSIX, `cmd /c` on Windows — plus syntax guidance
-- **Working directory** picode was launched in
-- **Session start time**
+- **Working directory**, quoted with control characters escaped
+- **Current local date**
 
 The block is captured **once at startup**, so the entire system message stays constant
-for the session and the server can cache those prompt tokens.
+for the session. Unlike a timestamp, the date also permits prompt-cache reuse across
+sessions started on the same day. Use `-no-environment` to omit the block.
 
 On **Windows**, `run_command` actually invokes `cmd /c` (Command Prompt). The tool
 description and the runtime block both reflect this, so the model is told to use CMD
