@@ -14,6 +14,7 @@ func main() {
 	}
 }
 
+// run wires configuration, services, the session, and the frontend.
 func run() error {
 	baseURL := flag.String("base-url", "http://localhost:8080", "llama-server base URL")
 	apiKey := flag.String("api-key", "", "API key (empty for local)")
@@ -25,6 +26,7 @@ func run() error {
 	logSession := flag.Bool("log", false, "log full request JSON to stderr and ~/.picode/logs/<timestamp>.log")
 	flag.Parse()
 
+	// Resolve the system message before creating session resources.
 	prompt, err := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
 	if err != nil {
 		return err
@@ -33,11 +35,13 @@ func run() error {
 		prompt.Text += "\n\n" + buildEnvironmentBlock()
 	}
 
+	// PlainUI is the only frontend until a full TUI is added.
 	var ui Frontend = NewPlainUI(os.Stdin, os.Stdout, os.Stderr)
 	for _, warning := range prompt.Warnings {
 		ui.Warning(warning)
 	}
 
+	// Logging is optional and remains a no-op when logger is nil.
 	var logger *RequestLogger
 	if *logSession {
 		logger, err = NewRequestLogger()
@@ -49,6 +53,7 @@ func run() error {
 		defer logger.Close()
 	}
 
+	// The session coordinates the API client, tools, and frontend.
 	client := NewClient(*baseURL, *apiKey, *model)
 	client.Logger = logger
 	client.Tools = allTools()

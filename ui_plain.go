@@ -13,6 +13,7 @@ import (
 	"time"
 )
 
+// ANSI styles used by the plain terminal renderer.
 const (
 	colorReset  = "\033[0m"
 	colorCyan   = "\033[1;36m"
@@ -22,11 +23,13 @@ const (
 	clearEOL    = "\033[K"
 )
 
+// PlainUI implements the current line-oriented terminal interface.
 type PlainUI struct {
 	in  io.Reader
 	out io.Writer
 	err io.Writer
 
+	// mu serializes event rendering with spinner output.
 	mu sync.Mutex
 
 	spinnerUpdate func(string)
@@ -37,14 +40,17 @@ type PlainUI struct {
 	printedCmdLen map[int]int
 }
 
+// NewPlainUI creates a frontend around injectable terminal streams.
 func NewPlainUI(in io.Reader, out, errOut io.Writer) *PlainUI {
 	return &PlainUI{in: in, out: out, err: errOut}
 }
 
+// Warning writes a startup diagnostic to stderr.
 func (ui *PlainUI) Warning(message string) {
 	fmt.Fprintf(ui.err, "warning: %s\n", message)
 }
 
+// Run reads user input and drives the session until exit.
 func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -52,6 +58,7 @@ func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
+	// Ctrl-C cancels an active tool; otherwise it exits the session.
 	go func() {
 		for {
 			select {
@@ -65,6 +72,7 @@ func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
 		}
 	}()
 
+	// Scan in the background so context cancellation can unblock the UI.
 	type inputResult struct {
 		text string
 		ok   bool
@@ -117,10 +125,12 @@ func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
 	}
 }
 
+// Emit renders one semantic UI event.
 func (ui *PlainUI) Emit(event UIEvent) {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
+	// Each event updates only its related renderer state.
 	switch event := event.(type) {
 	case StatusEvent:
 		if ui.spinnerStop == nil {
@@ -173,6 +183,7 @@ func (ui *PlainUI) Emit(event UIEvent) {
 	}
 }
 
+// resetResponseState prepares tracking for a new model stream.
 func (ui *PlainUI) resetResponseState() {
 	ui.textOpen = false
 	ui.toolOpen = false
@@ -180,6 +191,7 @@ func (ui *PlainUI) resetResponseState() {
 	ui.printedCmdLen = make(map[int]int)
 }
 
+// stopSpinner is safe to call after the spinner has already stopped.
 func (ui *PlainUI) stopSpinner() {
 	if ui.spinnerStop != nil {
 		ui.spinnerStop()
@@ -188,6 +200,7 @@ func (ui *PlainUI) stopSpinner() {
 	}
 }
 
+// spinWithStatus runs a spinner until its stop function is called.
 func (ui *PlainUI) spinWithStatus(initial string) (update func(string), stop func()) {
 	done := make(chan struct{})
 	var once sync.Once
@@ -226,11 +239,13 @@ func (ui *PlainUI) spinWithStatus(initial string) (update func(string), stop fun
 	return update, stop
 }
 
+// printSummary renders the final session token counts.
 func (ui *PlainUI) printSummary(usage UsageTotals) {
 	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n\n",
 		usage.Total(), usage.Prompt-usage.Cached, usage.Cached, usage.Completion)
 }
 
+// printTruncated limits command output shown in the transcript.
 func printTruncated(out io.Writer, output string, limit int, color string) {
 	lines := strings.Split(output, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {

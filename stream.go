@@ -6,7 +6,9 @@ import (
 	"strings"
 )
 
+// streamAssistant assembles a streamed response and emits UI updates.
 func streamAssistant(ctx context.Context, client ChatStreamer, history []Message, events EventSink) (*Message, *Usage, string, error) {
+	// Always finish the UI stream, including on errors and cancellation.
 	events.Emit(StatusEvent{Phase: StatusWaiting})
 	defer events.Emit(StreamFinishedEvent{})
 	stream, err := client.StreamChat(ctx, history)
@@ -38,10 +40,12 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 		if err != nil {
 			return nil, nil, "", err
 		}
+		// The first server chunk changes the visible status to thinking.
 		if !gotFirstChunk {
 			gotFirstChunk = true
 			events.Emit(StatusEvent{Phase: StatusThinking})
 		}
+		// Usage often arrives in a final chunk without any choices.
 		if chunk.Usage != nil {
 			usage = chunk.Usage
 		}
@@ -61,6 +65,7 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 			content.WriteString(delta.Content)
 			events.Emit(AssistantDeltaEvent{Text: delta.Content})
 		}
+		// Tool calls can arrive as fragments across several chunks.
 		for _, tc := range delta.ToolCalls {
 			for len(toolCalls) <= tc.Index {
 				toolCalls = append(toolCalls, ToolCall{})
@@ -86,9 +91,11 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 		}
 	}
 
+	// Treat a stream with no text or tools as an empty response.
 	if content.Len() == 0 && len(toolCalls) == 0 {
 		return nil, usage, finish, nil
 	}
+	// Some compatible servers omit these fields on tool-only replies.
 	if role == "" {
 		role = "assistant"
 	}
@@ -105,6 +112,7 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 	return message, usage, finish, nil
 }
 
+// displayCommand decodes a command while its JSON is still streaming.
 func displayCommand(arguments string) string {
 	raw := extractCommandValue(arguments)
 	command := unescapeJSONString(raw)
@@ -118,6 +126,7 @@ func displayCommand(arguments string) string {
 	return command
 }
 
+// extractCommandValue reads the command from partial JSON arguments.
 func extractCommandValue(args string) string {
 	idx := strings.Index(args, `"command"`)
 	if idx < 0 {
@@ -133,6 +142,7 @@ func extractCommandValue(args string) string {
 		return ""
 	}
 	rest = rest[1:]
+	// Stop only at a quote that is not escaped.
 	escaped := false
 	for i, char := range rest {
 		if escaped {
@@ -150,6 +160,7 @@ func extractCommandValue(args string) string {
 	return rest
 }
 
+// unescapeJSONString decodes common escapes for live display.
 func unescapeJSONString(s string) string {
 	if !strings.ContainsRune(s, '\\') {
 		return s

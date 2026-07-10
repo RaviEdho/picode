@@ -13,13 +13,16 @@ import (
 	"time"
 )
 
+// ToolExecutor runs tools and tracks the active command for cancellation.
 type ToolExecutor struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 }
 
+// NewToolExecutor creates an executor with no active command.
 func NewToolExecutor() *ToolExecutor { return &ToolExecutor{} }
 
+// CancelActive stops the current command without ending the session.
 func (e *ToolExecutor) CancelActive() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -30,6 +33,7 @@ func (e *ToolExecutor) CancelActive() bool {
 	return true
 }
 
+// runCommandTool returns the OpenAI schema for the shell tool.
 func runCommandTool() Tool {
 	_, _, shellSyntaxNote := shellInfo()
 	return Tool{
@@ -57,10 +61,12 @@ func runCommandTool() Tool {
 	}
 }
 
+// allTools returns every tool exposed to the model.
 func allTools() []Tool {
 	return []Tool{runCommandTool()}
 }
 
+// Execute validates and runs one model tool call.
 func (e *ToolExecutor) Execute(ctx context.Context, tc ToolCall) (cmd string, output string) {
 	switch tc.Function.Name {
 	case "run_command":
@@ -83,12 +89,15 @@ func (e *ToolExecutor) Execute(ctx context.Context, tc ToolCall) (cmd string, ou
 	}
 }
 
+// runShellCommand captures output and places the process tree in its own group.
 func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (string, error) {
+	// Every command inherits session cancellation and has a hard timeout.
 	baseCtx, timeoutCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer timeoutCancel()
 
 	cmdCtx, cmdCancel := context.WithCancel(baseCtx)
 
+	// Publish this cancel function for the frontend's Ctrl-C handler.
 	e.mu.Lock()
 	e.cancel = cmdCancel
 	e.mu.Unlock()
@@ -105,6 +114,7 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 		shell, shellFlag = "cmd", "/c"
 	}
 
+	// A separate process group lets cancellation stop the full tree.
 	cmd := exec.CommandContext(cmdCtx, shell, shellFlag, command)
 	cmd.SysProcAttr = sysProcAttrNewProcessGroup()
 
@@ -118,6 +128,7 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 		return "", err
 	}
 
+	// Drain output concurrently so a cancelled process cannot block on I/O.
 	var buf bytes.Buffer
 	copyDone := make(chan struct{})
 	go func() {
@@ -133,6 +144,7 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 		<-copyDone
 		return strings.TrimRight(buf.String(), "\n\t "), err
 	case <-cmdCtx.Done():
+		// Kill the group so child processes cannot survive cancellation.
 		killProcessGroup(cmd.Process.Pid)
 		<-waitCh
 		<-copyDone

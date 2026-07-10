@@ -44,17 +44,21 @@ user's files using the available shell tool.
 
 Trust the supplied runtime environment details over assumptions.`
 
+// PromptResolution holds the chosen prompt and non-fatal warnings.
 type PromptResolution struct {
 	Text     string
 	Enabled  bool
 	Warnings []string
 }
 
+// resolveSystemPrompt applies flag, environment, then built-in precedence.
 func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (PromptResolution, error) {
+	// -no-system overrides every other prompt source.
 	if noSystem {
 		return PromptResolution{}, nil
 	}
 
+	// Explicit flags take priority over environment variables.
 	if value := strings.TrimSpace(systemFlag); value != "" {
 		return PromptResolution{Text: value, Enabled: true}, nil
 	}
@@ -71,6 +75,7 @@ func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (Prom
 		}
 		return PromptResolution{Text: text, Enabled: true}, nil
 	}
+	// Environment values are used only when no prompt flag was set.
 	if value := strings.TrimSpace(os.Getenv("PICODE_SYSTEM")); value != "" {
 		return PromptResolution{Text: value, Enabled: true}, nil
 	}
@@ -91,9 +96,11 @@ func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (Prom
 		return PromptResolution{Text: text, Enabled: true}, nil
 	}
 
+	// The built-in prompt is the final fallback.
 	return PromptResolution{Text: defaultSystemPrompt, Enabled: true}, nil
 }
 
+// readPromptFile trims surrounding whitespace from prompt files.
 func readPromptFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
