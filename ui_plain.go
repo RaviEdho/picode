@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -73,37 +74,56 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 		}
 	}()
 
-	// Scan in the background so context cancellation can unblock the UI.
-	type inputResult struct {
-		text string
-		ok   bool
-		err  error
-	}
-	input := make(chan inputResult, 1)
-	go func() {
-		scanner := bufio.NewScanner(ui.in)
-		for scanner.Scan() {
-			select {
-			case input <- inputResult{text: scanner.Text(), ok: true}:
-			case <-ctx.Done():
-				return
+	// Terminal input uses the platform line editor. Pipes, files, and injected
+	// test streams retain the scanner path.
+	editor := newPlatformLineEditor(ui.in, ui.out)
+	var scannedInput <-chan inputResult
+	if editor == nil {
+		input := make(chan inputResult, 1)
+		scannedInput = input
+		go func() {
+			scanner := bufio.NewScanner(ui.in)
+			for scanner.Scan() {
+				select {
+				case input <- inputResult{text: scanner.Text(), ok: true}:
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-		select {
-		case input <- inputResult{err: scanner.Err()}:
-		case <-ctx.Done():
-		}
-	}()
+			select {
+			case input <- inputResult{err: scanner.Err()}:
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	fmt.Fprintf(ui.out, "picode [%s] — type 'exit' or Ctrl-D to quit\n", session.SessionID())
 	ui.printHistory(session.History())
 	defer func() { ui.printSummary(session.Usage(), session.SessionID()) }()
 	for {
-		fmt.Fprintf(ui.out, "%syou>%s ", colorCyan, colorReset)
+		input := scannedInput
+		if editor != nil {
+			result := make(chan inputResult, 1)
+			input = result
+			go func() {
+				prompt := colorCyan + "you>" + colorReset + " "
+				result <- editorInput(ctx, editor, prompt)
+			}()
+		} else {
+			fmt.Fprintf(ui.out, "%syou>%s ", colorCyan, colorReset)
+		}
 		select {
 		case <-ctx.Done():
+			// The editor owns temporary terminal settings. Wait for its short
+			// context poll so it restores them before the process can exit.
+			if editor != nil {
+				<-input
+			}
 			return nil
 		case result := <-input:
+			if errors.Is(result.err, errInputInterrupt) {
+				return nil
+			}
 			if result.err != nil {
 				return fmt.Errorf("read input: %w", result.err)
 			}
