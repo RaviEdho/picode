@@ -97,7 +97,7 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 
 	fmt.Fprintf(ui.out, "picode [%s] — type 'exit' or Ctrl-D to quit\n", session.SessionID())
 	ui.printHistory(session.History())
-	defer func() { ui.printSummary(session.Usage()) }()
+	defer func() { ui.printSummary(session.Usage(), session.SessionID()) }()
 	for {
 		fmt.Fprintf(ui.out, "%syou>%s ", colorCyan, colorReset)
 		select {
@@ -265,9 +265,10 @@ func (ui *PlainUI) printHistory(messages []Message) {
 }
 
 // printSummary renders the final session token counts.
-func (ui *PlainUI) printSummary(usage UsageTotals) {
-	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n\n",
+func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string) {
+	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n",
 		usage.Total(), usage.Prompt-usage.Cached, usage.Cached, usage.Completion)
+	fmt.Fprintf(ui.out, "resume session with %spicode -resume %s%s\n\n", colorFaded, sessionID, colorReset)
 }
 
 // printTruncated limits command output shown in the transcript.

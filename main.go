@@ -19,7 +19,7 @@ func main() {
 
 // run wires configuration, services, the session, and the frontend.
 func run() error {
-	baseURL := flag.String("base-url", "http://localhost:8080", "llama-server base URL")
+	baseURL := flag.String("base-url", "http://localhost:8080", "server base URL")
 	apiKey := flag.String("api-key", "", "API key (empty for local)")
 	model := flag.String("model", "", "model name (empty = server default)")
 	systemFlag := flag.String("system", "", "system prompt text (overrides the built-in default)")
