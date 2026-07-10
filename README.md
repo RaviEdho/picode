@@ -29,6 +29,7 @@ go run .
 | `-system-file` | *(empty)* | Path to a file containing the system prompt |
 | `-no-system` | `false` | Send **no** system message (original harness behaviour) |
 | `-no-environment` | `false` | Do not append runtime details to the system prompt |
+| `-resume [session-id]` | *(unset)* | Resume the latest session, or the specified 12-character session |
 
 ## System prompt
 
@@ -78,7 +79,41 @@ unchanged from before.
 
 The model has access to `run_command` — a shell tool that executes commands on your machine. This lets it run any CLI tool (`curl`, `grep`, `psql`, etc.).
 
-## Session
+## Saved sessions
+
+Every normal `picode` invocation automatically creates and records a new session.
+The generated 12-character ID is shown in the startup banner:
+
+```
+picode [a7k2m9x4q1bz] — type 'exit' or Ctrl-D to quit
+```
+
+Sessions are saved after each completed turn under
+`~/.picode/sessions/<session-id>.json`. Resuming reprints the saved transcript
+before the next prompt so the terminal conversation continues where it stopped.
+Resume the latest populated session or a specific session later with:
+
+```bash
+picode -resume
+picode -resume a7k2m9x4q1bz
+```
+
+Sessions are scoped to the canonical working directory where they were created.
+A bare `-resume` selects the latest populated session from the current directory,
+and `-resume <session-id>` rejects a session created in another directory. This
+prevents a saved conversation from accidentally operating on a different project.
+
+System-prompt flags cannot be changed while resuming; the saved base prompt is
+reused and runtime environment details are rebuilt for the current process. The current base URL and API key are
+always used and credentials are never saved. An explicitly supplied `-model`
+overrides the saved model.
+
+Session files contain the complete conversation, shell commands, and full tool
+output, and are created with private permissions where the platform supports it.
+Only completed turns are persisted, so an interrupted response does not corrupt
+resumable history. Concurrent use of the same session is rejected.
+
+## Session summary
 
 Exit with `exit`, `quit`, or `Ctrl-D`. On exit, a token summary is printed:
 

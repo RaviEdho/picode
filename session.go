@@ -18,9 +18,9 @@ var ErrSessionBusy = errors.New("session is already running a turn")
 
 // UsageTotals tracks token use across the session.
 type UsageTotals struct {
-	Prompt     int
-	Cached     int
-	Completion int
+	Prompt     int `json:"prompt"`
+	Cached     int `json:"cached"`
+	Completion int `json:"completion"`
 }
 
 // Total returns prompt and completion tokens combined.
@@ -42,13 +42,21 @@ type Session struct {
 	usage   UsageTotals
 }
 
-// NewSession creates a session with an optional system message.
-func NewSession(client ChatStreamer, executor *ToolExecutor, prompt PromptResolution, logger *RequestLogger) *Session {
+// SessionSnapshot is a detached copy of resumable conversation state.
+type SessionSnapshot struct {
+	Messages []Message
+	Usage    UsageTotals
+}
+
+// NewSession creates a session with an optional system message and initial state.
+func NewSession(client ChatStreamer, executor *ToolExecutor, prompt PromptResolution, logger *RequestLogger, initial SessionSnapshot) *Session {
 	s := &Session{
 		client:        client,
 		executor:      executor,
 		logger:        logger,
 		systemEnabled: prompt.Enabled,
+		history:       cloneMessages(initial.Messages),
+		usage:         initial.Usage,
 	}
 	if prompt.Enabled {
 		s.systemMessage = Message{Role: "system", Content: prompt.Text}
@@ -56,15 +64,24 @@ func NewSession(client ChatStreamer, executor *ToolExecutor, prompt PromptResolu
 	return s
 }
 
-// RunTurn processes one user message through its final model response.
-func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) error {
+// RunTurn processes one user message through its final model response. The
+// committed result is true only when a complete turn was added to history.
+func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (committed bool, err error) {
 	if !s.busy.CompareAndSwap(false, true) {
-		return ErrSessionBusy
+		return false, ErrSessionBusy
 	}
 	defer s.busy.Store(false)
 
-	// Roll back to this point if the turn fails or returns nothing.
+	// Treat a turn as a transaction so failed and cancelled tool round trips
+	// can never leave malformed resumable history behind.
 	turnStart := len(s.history)
+	usageStart := s.Usage()
+	defer func() {
+		if !committed {
+			s.history = s.history[:turnStart]
+			s.setUsage(usageStart)
+		}
+	}()
 	s.history = append(s.history, Message{Role: "user", Content: input})
 
 	for {
@@ -78,13 +95,11 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) e
 		// One turn may require several model requests around tool calls.
 		assistant, usage, finishReason, err := streamAssistant(ctx, s.client, messages, events)
 		if err != nil {
-			s.history = s.history[:turnStart]
-			return err
+			return false, err
 		}
 		if assistant == nil {
-			s.history = s.history[:turnStart]
 			events.Emit(EmptyResponseEvent{})
-			return nil
+			return false, nil
 		}
 
 		s.history = append(s.history, *assistant)
@@ -92,7 +107,7 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) e
 			s.addUsage(*usage)
 		}
 		if finishReason != "tool_calls" {
-			return nil
+			return true, nil
 		}
 
 		// Send each tool result back to the model before continuing.
@@ -109,11 +124,27 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) e
 			})
 
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return false, ctx.Err()
 			}
 			s.history = append(s.history, Message{Role: "tool", ToolCallID: tc.ID, Content: result.Output})
 		}
 	}
+}
+
+// Snapshot returns a deep copy safe for persistence.
+func (s *Session) Snapshot() SessionSnapshot {
+	return SessionSnapshot{Messages: cloneMessages(s.history), Usage: s.Usage()}
+}
+
+func cloneMessages(messages []Message) []Message {
+	cloned := make([]Message, len(messages))
+	copy(cloned, messages)
+	for i := range cloned {
+		if messages[i].ToolCalls != nil {
+			cloned[i].ToolCalls = append([]ToolCall(nil), messages[i].ToolCalls...)
+		}
+	}
+	return cloned
 }
 
 // CancelActiveTool reports whether a running command was cancelled.
@@ -126,6 +157,12 @@ func (s *Session) Usage() UsageTotals {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	return s.usage
+}
+
+func (s *Session) setUsage(usage UsageTotals) {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	s.usage = usage
 }
 
 // addUsage merges usage from one model response.

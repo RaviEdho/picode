@@ -51,7 +51,7 @@ func (ui *PlainUI) Warning(message string) {
 }
 
 // Run reads user input and drives the session until exit.
-func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
+func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -95,7 +95,8 @@ func (ui *PlainUI) Run(ctx context.Context, session *Session) error {
 		}
 	}()
 
-	fmt.Fprintln(ui.out, "picode — type 'exit' or Ctrl-D to quit")
+	fmt.Fprintf(ui.out, "picode [%s] — type 'exit' or Ctrl-D to quit\n", session.SessionID())
+	ui.printHistory(session.History())
 	defer func() { ui.printSummary(session.Usage()) }()
 	for {
 		fmt.Fprintf(ui.out, "%syou>%s ", colorCyan, colorReset)
@@ -238,6 +239,29 @@ func (ui *PlainUI) spinWithStatus(initial string) (update func(string), stop fun
 		})
 	}
 	return update, stop
+}
+
+// printHistory restores the saved transcript using the same labels and
+// truncation as live output. It intentionally adds no resume-specific marker.
+func (ui *PlainUI) printHistory(messages []Message) {
+	for _, message := range messages {
+		switch message.Role {
+		case "user":
+			fmt.Fprintf(ui.out, "%syou>%s %s\n", colorCyan, colorReset, message.Content)
+		case "assistant":
+			if message.Content != "" {
+				fmt.Fprintf(ui.out, "%smodel>%s %s\n", colorGreen, colorReset, message.Content)
+			}
+			for _, call := range message.ToolCalls {
+				fmt.Fprintf(ui.out, "%srun_command>%s %s\n", colorYellow, colorReset,
+					displayCommand(call.Function.Arguments))
+			}
+		case "tool":
+			fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
+			printTruncated(ui.out, message.Content, 5, colorFaded)
+			fmt.Fprintln(ui.out)
+		}
+	}
 }
 
 // printSummary renders the final session token counts.

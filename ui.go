@@ -2,9 +2,18 @@ package main
 
 import "context"
 
+// Conversation is the frontend boundary for a resumable chat session.
+type Conversation interface {
+	RunTurn(context.Context, string, EventSink) error
+	CancelActiveTool() bool
+	Usage() UsageTotals
+	SessionID() string
+	History() []Message
+}
+
 // Frontend owns user input and presentation.
 type Frontend interface {
-	Run(context.Context, *Session) error
+	Run(context.Context, Conversation) error
 	Warning(string)
 }
 

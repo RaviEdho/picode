@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 )
 
 func main() {
@@ -24,20 +27,99 @@ func run() error {
 	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
 	noEnvironment := flag.Bool("no-environment", false, "do not append runtime environment details to the system prompt")
 	logSession := flag.Bool("log", false, "log full request JSON to stderr and ~/.picode/logs/<timestamp>.log")
-	flag.Parse()
+	var resume resumeFlag
+	flag.Var(&resume, "resume", "resume the latest session, or a specific 12-character session ID")
+	if err := flag.CommandLine.Parse(normalizeResumeArgs(os.Args[1:])); err != nil {
+		return err
+	}
 
-	// Resolve the system message before creating session resources.
-	prompt, err := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
+	explicit := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	resuming := resume.Enabled
+	if resuming {
+		for _, name := range []string{"system", "system-file", "no-system", "no-environment"} {
+			if explicit[name] {
+				return fmt.Errorf("-%s cannot be used when resuming a session", name)
+			}
+		}
+	}
+
+	workingDirectory, err := currentWorkingDirectory()
 	if err != nil {
 		return err
 	}
-	if prompt.Enabled && !*noEnvironment {
+	store, err := NewDefaultFileSessionStore()
+	if err != nil {
+		return err
+	}
+
+	var state *PersistedSession
+	var lock SessionLock
+	var startupWarnings []string
+	if resume.SessionID != "" {
+		state, err = store.Load(resume.SessionID)
+		if err == nil {
+			err = requireSessionWorkingDirectory(state, workingDirectory)
+		}
+	} else if resume.Enabled {
+		state, err = store.LoadLatest(workingDirectory)
+		if errors.Is(err, ErrSessionNotFound) {
+			return fmt.Errorf("no saved sessions to resume in %q", workingDirectory)
+		}
+	} else {
+		prompt, promptErr := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
+		if promptErr != nil {
+			return promptErr
+		}
+		state, lock, err = createAutomaticSession(store, prompt, !*noEnvironment, *model, workingDirectory)
+		startupWarnings = append(startupWarnings, prompt.Warnings...)
+	}
+	if err != nil {
+		return err
+	}
+
+	if lock == nil {
+		lock, err = store.Lock(state.ID)
+		if err != nil {
+			return fmt.Errorf("open session %q: %w", state.ID, err)
+		}
+	}
+	defer lock.Close()
+
+	// Reload after locking so a resume cannot use state saved just before the lock.
+	if resuming {
+		state, err = store.Load(state.ID)
+		if err != nil {
+			return err
+		}
+		if err := requireSessionWorkingDirectory(state, workingDirectory); err != nil {
+			return err
+		}
+	}
+
+	prompt := PromptResolution{
+		Text:    state.System.BasePrompt,
+		Enabled: state.System.Enabled,
+	}
+	if prompt.Enabled && state.System.IncludeEnvironment {
 		prompt.Text += "\n\n" + buildEnvironmentBlock()
+	}
+
+	// A resumed session uses its saved model unless this invocation explicitly
+	// supplies a model override. Endpoints and credentials are never persisted.
+	selectedModel := state.Model
+	if !resuming || explicit["model"] {
+		selectedModel = *model
+		if resuming && selectedModel != state.Model {
+			startupWarnings = append(startupWarnings,
+				fmt.Sprintf("session used model %q; continuing with %q", state.Model, selectedModel))
+			state.Model = selectedModel
+		}
 	}
 
 	// PlainUI is the only frontend until a full TUI is added.
 	var ui Frontend = NewPlainUI(os.Stdin, os.Stdout, os.Stderr)
-	for _, warning := range prompt.Warnings {
+	for _, warning := range startupWarnings {
 		ui.Warning(warning)
 	}
 
@@ -53,19 +135,105 @@ func run() error {
 		defer logger.Close()
 	}
 
-	// The session coordinates the API client, tools, and frontend.
-	client := NewClient(*baseURL, *apiKey, *model)
+	client := NewClient(*baseURL, *apiKey, selectedModel)
 	client.Logger = logger
 	client.Tools = allTools()
 
 	executor := NewToolExecutor()
-	session := NewSession(client, executor, prompt, logger)
+	session := NewSession(client, executor, prompt, logger, SessionSnapshot{
+		Messages: state.Messages,
+		Usage:    state.Usage,
+	})
+	conversation := NewPersistentConversation(session, store, state)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	logger.LogEvent("session started")
-	err = ui.Run(ctx, session)
+	err = ui.Run(ctx, conversation)
 	logger.LogEvent("session ended")
 	return err
+}
+
+// resumeFlag supports both bare -resume (latest) and -resume=<session-id>.
+type resumeFlag struct {
+	Enabled   bool
+	SessionID string
+}
+
+func (r *resumeFlag) String() string { return r.SessionID }
+
+func (r *resumeFlag) Set(value string) error {
+	if value == "false" {
+		r.Enabled = false
+		r.SessionID = ""
+		return nil
+	}
+	r.Enabled = true
+	if value == "true" {
+		r.SessionID = ""
+	} else {
+		r.SessionID = value
+	}
+	return nil
+}
+
+func (r *resumeFlag) IsBoolFlag() bool { return true }
+
+// normalizeResumeArgs lets the standard flag package accept the friendlier
+// separated form, -resume <session-id>, in addition to -resume=<session-id>.
+func normalizeResumeArgs(args []string) []string {
+	normalized := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if (arg == "-resume" || arg == "--resume") && i+1 < len(args) &&
+			!strings.HasPrefix(args[i+1], "-") {
+			normalized = append(normalized, "-resume="+args[i+1])
+			i++
+			continue
+		}
+		normalized = append(normalized, arg)
+	}
+	return normalized
+}
+
+// createAutomaticSession allocates and exclusively creates a fresh session.
+func createAutomaticSession(store *FileSessionStore, prompt PromptResolution, includeEnvironment bool, model, workingDirectory string) (*PersistedSession, SessionLock, error) {
+	for attempts := 0; attempts < 10; attempts++ {
+		id, err := GenerateSessionID()
+		if err != nil {
+			return nil, nil, err
+		}
+		lock, err := store.Lock(id)
+		if errors.Is(err, ErrSessionLocked) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		now := time.Now()
+		state := &PersistedSession{
+			Version:          currentSessionVersion,
+			ID:               id,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+			Model:            model,
+			WorkingDirectory: workingDirectory,
+			System: PersistedSystem{
+				Enabled:            prompt.Enabled,
+				BasePrompt:         prompt.Text,
+				IncludeEnvironment: includeEnvironment,
+			},
+			Messages: []Message{},
+		}
+		if err := store.Create(state); errors.Is(err, ErrSessionExists) {
+			lock.Close()
+			continue
+		} else if err != nil {
+			lock.Close()
+			return nil, nil, err
+		}
+		return state, lock, nil
+	}
+	return nil, nil, fmt.Errorf("could not allocate a unique session ID")
 }
