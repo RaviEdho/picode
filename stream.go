@@ -84,9 +84,9 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 				current.Function.Arguments += tc.Function.Arguments
 			}
 			events.Emit(ToolCallUpdateEvent{
-				Index:   tc.Index,
-				Name:    current.Function.Name,
-				Command: displayCommand(current.Function.Arguments),
+				Index: tc.Index,
+				Name:  current.Function.Name,
+				Input: displayToolInput(current.Function.Name, current.Function.Arguments),
 			})
 		}
 	}
@@ -112,9 +112,13 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 	return message, usage, finish, nil
 }
 
-// displayCommand decodes a command while its JSON is still streaming.
-func displayCommand(arguments string) string {
-	raw := extractCommandValue(arguments)
+// displayToolInput decodes the primary argument while its JSON is streaming.
+func displayToolInput(name, arguments string) string {
+	field := "command"
+	if name == "apply_patch" {
+		field = "patch"
+	}
+	raw := extractStringValue(arguments, field)
 	command := unescapeJSONString(raw)
 	trailing := 0
 	for i := len(raw) - 1; i >= 0 && raw[i] == '\\'; i-- {
@@ -126,13 +130,14 @@ func displayCommand(arguments string) string {
 	return command
 }
 
-// extractCommandValue reads the command from partial JSON arguments.
-func extractCommandValue(args string) string {
-	idx := strings.Index(args, `"command"`)
+// extractStringValue reads a named field from partial JSON arguments.
+func extractStringValue(args, field string) string {
+	key := `"` + field + `"`
+	idx := strings.Index(args, key)
 	if idx < 0 {
 		return ""
 	}
-	rest := args[idx+len(`"command"`):]
+	rest := args[idx+len(key):]
 	rest = strings.TrimLeft(rest, " \t\r\n")
 	if !strings.HasPrefix(rest, ":") {
 		return ""

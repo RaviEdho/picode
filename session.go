@@ -114,13 +114,13 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (
 		for _, tc := range assistant.ToolCalls {
 			result := s.executor.Execute(ctx, tc)
 			s.logger.LogEvent(fmt.Sprintf("tool %s: cmd=%q status=%s output=(%d bytes)",
-				tc.Function.Name, result.Command, result.Status, len(result.Output)))
+				tc.Function.Name, result.Input, result.Status, len(result.Output)))
 
 			events.Emit(ToolResultEvent{
-				Name:    tc.Function.Name,
-				Command: result.Command,
-				Output:  result.Output,
-				Status:  result.Status,
+				Name:   tc.Function.Name,
+				Input:  result.Input,
+				Output: result.Output,
+				Status: result.Status,
 			})
 
 			if ctx.Err() != nil {

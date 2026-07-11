@@ -65,7 +65,7 @@ func (e *ToolExecutor) executeRunCommand(ctx context.Context, tc ToolCall) ToolR
 	if output == "" {
 		output = "(no output)"
 	}
-	return ToolResult{Command: args.Command, Output: output, Status: status}
+	return ToolResult{Input: args.Command, Output: output, Status: status}
 }
 
 // CancelActive stops the current command without ending the session.

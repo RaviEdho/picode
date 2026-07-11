@@ -34,7 +34,7 @@ go run .
 ## System prompt
 
 `picode` sends a **system message** before your first message so the model knows it
-is a local, terminal-based coding assistant with a `run_command` shell tool. The
+is a local, terminal-based coding assistant with `run_command` and `apply_patch` tools. The
 prompt is resolved by the following precedence (highest first):
 
 1. `-system "text"` flag — inline override
@@ -77,7 +77,7 @@ unchanged from before.
 
 ## Tools
 
-The model has access to `run_command` — a shell tool that executes commands on your machine. This lets it run any CLI tool (`curl`, `grep`, `psql`, etc.).
+The model has access to `run_command` for executing local shell commands and `apply_patch` for structured, validated file edits. Patches support adding, updating, and deleting files relative to the working directory.
 
 ## Saved sessions
 

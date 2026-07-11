@@ -43,19 +43,19 @@ type StatusEvent struct{ Phase StatusPhase }
 // AssistantDeltaEvent carries one streamed text fragment.
 type AssistantDeltaEvent struct{ Text string }
 
-// ToolCallUpdateEvent carries the command assembled so far.
+// ToolCallUpdateEvent carries the tool input assembled so far.
 type ToolCallUpdateEvent struct {
-	Index   int
-	Name    string
-	Command string
+	Index int
+	Name  string
+	Input string
 }
 
-// ToolResultEvent carries completed command output.
+// ToolResultEvent carries completed tool output.
 type ToolResultEvent struct {
-	Name    string
-	Command string
-	Output  string
-	Status  ToolStatus
+	Name   string
+	Input  string
+	Output string
+	Status ToolStatus
 }
 
 // StreamFinishedEvent closes the active streamed response.

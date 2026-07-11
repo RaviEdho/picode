@@ -170,18 +170,21 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		fmt.Fprint(ui.out, event.Text)
 	case ToolCallUpdateEvent:
 		ui.stopSpinner()
+		if event.Name == "" {
+			return
+		}
 		if !ui.printedTools[event.Index] {
 			if ui.textOpen || ui.toolOpen {
 				fmt.Fprintln(ui.out)
 			}
-			fmt.Fprintf(ui.out, "%srun_command>%s ", colorYellow, colorReset)
+			fmt.Fprintf(ui.out, "%s%s>%s ", colorYellow, event.Name, colorReset)
 			ui.printedTools[event.Index] = true
 			ui.toolOpen = true
 		}
 		printed := ui.printedCmdLen[event.Index]
-		if len(event.Command) > printed {
-			fmt.Fprint(ui.out, event.Command[printed:])
-			ui.printedCmdLen[event.Index] = len(event.Command)
+		if len(event.Input) > printed {
+			fmt.Fprint(ui.out, event.Input[printed:])
+			ui.printedCmdLen[event.Index] = len(event.Input)
 		}
 	case StreamFinishedEvent:
 		ui.stopSpinner()
@@ -195,7 +198,7 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		ui.toolOpen = false
 	case ToolResultEvent:
 		if event.Status == ToolCancelled {
-			fmt.Fprintf(ui.out, "%s^C cancelled run_command%s\n", colorYellow, colorReset)
+			fmt.Fprintf(ui.out, "%s^C cancelled %s%s\n", colorYellow, event.Name, colorReset)
 		}
 		fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
 		printTruncated(ui.out, event.Output, 5, colorFaded)
@@ -273,8 +276,8 @@ func (ui *PlainUI) printHistory(messages []Message) {
 				fmt.Fprintf(ui.out, "%smodel>%s %s\n", colorGreen, colorReset, message.Content)
 			}
 			for _, call := range message.ToolCalls {
-				fmt.Fprintf(ui.out, "%srun_command>%s %s\n", colorYellow, colorReset,
-					displayCommand(call.Function.Arguments))
+				fmt.Fprintf(ui.out, "%s%s>%s %s\n", colorYellow, call.Function.Name, colorReset,
+					displayToolInput(call.Function.Name, call.Function.Arguments))
 			}
 		case "tool":
 			fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
