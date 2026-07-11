@@ -18,9 +18,10 @@ var ErrSessionBusy = errors.New("session is already running a turn")
 
 // UsageTotals tracks token use across the session.
 type UsageTotals struct {
-	Prompt     int `json:"prompt"`
-	Cached     int `json:"cached"`
-	Completion int `json:"completion"`
+	Prompt     int      `json:"prompt"`
+	Cached     int      `json:"cached"`
+	Completion int      `json:"completion"`
+	Cost       *float64 `json:"cost,omitempty"`
 }
 
 // Total returns prompt and completion tokens combined.
@@ -174,4 +175,11 @@ func (s *Session) addUsage(u Usage) {
 		s.usage.Cached += u.PromptTokensDetails.CachedTokens
 	}
 	s.usage.Completion += u.CompletionTokens
+	if u.Cost != nil {
+		if s.usage.Cost == nil {
+			v := 0.0
+			s.usage.Cost = &v
+		}
+		*s.usage.Cost += *u.Cost
+	}
 }

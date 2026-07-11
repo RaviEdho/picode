@@ -3,11 +3,13 @@ package main
 // OpenAI-compatible request/response types
 
 type ChatCompletionRequest struct {
-	Model         string         `json:"model"`
-	Messages      []Message      `json:"messages"`
-	Tools         []Tool         `json:"tools,omitempty"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+	Model           string         `json:"model"`
+	Messages        []Message      `json:"messages"`
+	Tools           []Tool         `json:"tools,omitempty"`
+	Stream          bool           `json:"stream"`
+	StreamOptions   *StreamOptions `json:"stream_options,omitempty"`
+	ServiceTier     string         `json:"service_tier,omitempty"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 }
 
 type StreamOptions struct {
@@ -64,6 +66,7 @@ type Usage struct {
 	ReasoningTokens     int                  `json:"reasoning_tokens"`
 	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 	TotalTokens         int                  `json:"total_tokens"`
+	Cost                *float64             `json:"cost,omitempty"`
 }
 
 // ---- Streaming (SSE) types ----

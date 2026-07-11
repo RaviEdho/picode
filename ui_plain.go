@@ -289,8 +289,12 @@ func (ui *PlainUI) printHistory(messages []Message) {
 
 // printSummary renders the final session token counts.
 func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string, resumable bool) {
-	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n",
+	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received",
 		usage.Total(), usage.Prompt-usage.Cached, usage.Cached, usage.Completion)
+	if usage.Cost != nil {
+		fmt.Fprintf(ui.out, ", $%.6f cost", *usage.Cost)
+	}
+	fmt.Fprintln(ui.out)
 	if resumable {
 		fmt.Fprintf(ui.out, "resume session with %spicode -resume %s%s\n", colorFaded, sessionID, colorReset)
 	}
