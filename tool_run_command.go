@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -29,7 +27,7 @@ func runCommandTool() Tool {
 				"its combined stdout/stderr. " + shellSyntaxNote + " " +
 				"Use it to inspect the filesystem, run builds/tests, query git, read files, " +
 				"or apply changes. There is a hard 30-second timeout per call; for long tasks " +
-				"use backgrounding (`cmd > out.log 2>&1 &`), output redirection, or poll in a later call. " +
+				"redirect output and poll it in a later call. " +
 				"Output is trimmed of trailing whitespace. Prefer read-only investigative " +
 				"commands before making changes, and verify changes afterwards.",
 			Parameters: map[string]any{
@@ -104,13 +102,8 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 		return "", status, err
 	}
 
-	shell, shellFlag := "sh", "-c"
-	if runtime.GOOS == "windows" {
-		shell, shellFlag = "cmd", "/c"
-	}
-
 	// Cancellation is handled below so the full process group is always killed.
-	cmd := exec.Command(shell, shellFlag, command)
+	cmd := newShellCommand(command)
 	cmd.SysProcAttr = sysProcAttrNewProcessGroup()
 
 	stdout, err := cmd.StdoutPipe()

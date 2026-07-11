@@ -27,10 +27,10 @@ func friendlyOS() string {
 // flag`") so it reads cleanly in both the system prompt and the tool schema.
 func shellInfo() (interpreter, flag, syntaxHint string) {
 	if runtime.GOOS == "windows" {
-		return "cmd", "/c",
-			"Use Windows Command Prompt syntax (e.g. `dir`, `copy`, `&&`, `> file`). " +
-				"For PowerShell prefix the command with `powershell -NoProfile -Command \"...\"`. " +
-				"Paths use backslashes and quoting uses double-quotes."
+		return "powershell.exe", "-NoLogo -NoProfile -NonInteractive -Command -",
+			"Use Windows PowerShell syntax (cmdlets, pipelines, `$variables`, and `;`). " +
+				"The script is supplied through stdin, so do not wrap it in `powershell -Command`. " +
+				"To explicitly use Command Prompt, invoke `cmd.exe /d /c \"...\"`."
 	}
 	return "sh", "-c",
 		"Use POSIX shell syntax (&&, |, 2>&1, etc.)."
@@ -40,8 +40,8 @@ func shellInfo() (interpreter, flag, syntaxHint string) {
 // argument in the run_command tool schema.
 func shellCommandDescription() string {
 	if runtime.GOOS == "windows" {
-		return "The complete Command Prompt command to execute. Chain commands with &&, " +
-			"pipe with |, and use 2>&1 to capture stderr."
+		return "The complete Windows PowerShell script to execute. Use pipelines, semicolons, " +
+			"and PowerShell quoting; do not add a powershell.exe wrapper."
 	}
 	return "The full shell command to execute. Chain with && or ;, pipe with |, " +
 		"and use 2>&1 to capture stderr."

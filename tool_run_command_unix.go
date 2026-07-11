@@ -2,7 +2,15 @@
 
 package main
 
-import "syscall"
+import (
+	"os/exec"
+	"syscall"
+)
+
+// newShellCommand passes the command directly to the POSIX shell.
+func newShellCommand(command string) *exec.Cmd {
+	return exec.Command("sh", "-c", command)
+}
 
 // sysProcAttrNewProcessGroup makes the spawned shell the leader of a fresh
 // process group, so the whole tree (shell + its descendants) can be signalled

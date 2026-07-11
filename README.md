@@ -63,7 +63,7 @@ including custom prompts, so the model knows the real platform it is operating o
 This block contains:
 
 - **Platform** — OS (e.g. `Linux`, `Windows`, `macOS`) and architecture
-- **Shell / interpreter** — `sh -c` on POSIX, `cmd /c` on Windows — plus syntax guidance
+- **Shell / interpreter** — `sh -c` on POSIX, native PowerShell on Windows — plus syntax guidance
 - **Working directory**, quoted with control characters escaped
 - **Current local date**
 
@@ -71,10 +71,10 @@ The block is captured **once at startup**, so the entire system message stays co
 for the session. Unlike a timestamp, the date also permits prompt-cache reuse across
 sessions started on the same day. Use `-no-environment` to omit the block.
 
-On **Windows**, `run_command` actually invokes `cmd /c` (Command Prompt). The tool
-description and the runtime block both reflect this, so the model is told to use CMD
-syntax (or prefix PowerShell) instead of POSIX `sh`. On POSIX systems the behavior is
-unchanged from before.
+On **Windows**, `run_command` invokes `powershell.exe` directly and supplies the script
+through stdin. This avoids nested `cmd.exe`/PowerShell quoting and lets the model use
+PowerShell syntax without adding a wrapper. Command Prompt remains available explicitly
+through `cmd.exe /d /c "..."`. On POSIX systems the behavior is unchanged.
 
 ## Tools
 
