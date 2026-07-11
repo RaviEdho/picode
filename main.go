@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ func run() error {
 	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
 	noEnvironment := flag.Bool("no-environment", false, "do not append runtime environment details to the system prompt")
 	logSession := flag.Bool("log", false, "log full request JSON to stderr and ~/.picode/logs/<timestamp>.log")
+	listSessions := flag.Bool("sessions", false, "list saved sessions for the current directory and exit")
 	var resume resumeFlag
 	flag.Var(&resume, "resume", "resume the latest session, or a specific 12-character session ID")
 	if err := flag.CommandLine.Parse(normalizeResumeArgs(os.Args[1:])); err != nil {
@@ -51,6 +53,12 @@ func run() error {
 	store, err := NewDefaultFileSessionStore()
 	if err != nil {
 		return err
+	}
+	if *listSessions {
+		if resume.Enabled {
+			return errors.New("-sessions cannot be used with -resume")
+		}
+		return printSessions(store, workingDirectory, os.Stdout)
 	}
 
 	var state *PersistedSession
@@ -152,7 +160,59 @@ func run() error {
 	logger.LogEvent("session started")
 	err = ui.Run(ctx, conversation)
 	logger.LogEvent("session ended")
+	if len(conversation.History()) == 0 {
+		if deleteErr := store.Delete(state.ID); deleteErr != nil {
+			return errors.Join(err, fmt.Errorf("remove empty session %q: %w", state.ID, deleteErr))
+		}
+	}
 	return err
+}
+
+// printSessions displays enough context to identify an older conversation
+// without loading it into a new chat process.
+func printSessions(store *FileSessionStore, workingDirectory string, out io.Writer) error {
+	sessions, err := store.List(workingDirectory)
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
+		fmt.Fprintf(out, "No saved sessions in %s\n", workingDirectory)
+		return nil
+	}
+	fmt.Fprintf(out, "Saved sessions in %s (newest first):\n", workingDirectory)
+	for _, state := range sessions {
+		turns := 0
+		preview := "(empty session)"
+		for _, message := range state.Messages {
+			if message.Role != "user" {
+				continue
+			}
+			turns++
+			if preview == "(empty session)" {
+				preview = sessionPreview(message.Content, 64)
+			}
+		}
+		model := state.Model
+		if model == "" {
+			model = "default model"
+		}
+		fmt.Fprintf(out, "%s  %s  %3d turns  %-16s  %s\n",
+			state.ID, state.UpdatedAt.Local().Format("2006-01-02 15:04"), turns, model, preview)
+	}
+	fmt.Fprintln(out, "\nResume one with: picode -resume <session-id>")
+	return nil
+}
+
+func sessionPreview(content string, limit int) string {
+	preview := strings.Join(strings.Fields(content), " ")
+	if preview == "" {
+		return "(blank first message)"
+	}
+	runes := []rune(preview)
+	if len(runes) > limit {
+		return string(runes[:limit-1]) + "…"
+	}
+	return preview
 }
 
 // resumeFlag supports both bare -resume (latest) and -resume=<session-id>.

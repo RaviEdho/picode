@@ -247,6 +247,19 @@ func (s *FileSessionStore) Save(state *PersistedSession) error {
 	return nil
 }
 
+// Delete removes a saved session. Callers must hold its session lock.
+func (s *FileSessionStore) Delete(id string) error {
+	if err := validateSessionID(id); err != nil {
+		return err
+	}
+	if err := os.Remove(s.sessionPath(id)); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: %s", ErrSessionNotFound, id)
+	} else if err != nil {
+		return fmt.Errorf("delete session %q: %w", id, err)
+	}
+	return nil
+}
+
 func (s *FileSessionStore) Load(id string) (*PersistedSession, error) {
 	if err := validateSessionID(id); err != nil {
 		return nil, err
@@ -268,15 +281,15 @@ func (s *FileSessionStore) Load(id string) (*PersistedSession, error) {
 	return state, nil
 }
 
-// LoadLatest returns the most recently updated valid session from the given
-// working directory. Populated sessions are preferred so an accidental empty
-// launch does not hide useful history.
-func (s *FileSessionStore) LoadLatest(workingDirectory string) (*PersistedSession, error) {
+// List returns every valid session for a working directory, newest first.
+// Unreadable or invalid files are ignored so one damaged session does not make
+// the rest of the session history inaccessible.
+func (s *FileSessionStore) List(workingDirectory string) ([]*PersistedSession, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, fmt.Errorf("read session directory: %w", err)
 	}
-	var populated, empty []*PersistedSession
+	var sessions []*PersistedSession
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -289,6 +302,27 @@ func (s *FileSessionStore) LoadLatest(workingDirectory string) (*PersistedSessio
 		if err != nil || !sameWorkingDirectory(state.WorkingDirectory, workingDirectory) {
 			continue
 		}
+		sessions = append(sessions, state)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].UpdatedAt.Equal(sessions[j].UpdatedAt) {
+			return sessions[i].ID > sessions[j].ID
+		}
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
+	return sessions, nil
+}
+
+// LoadLatest returns the most recently updated valid session from the given
+// working directory. Populated sessions are preferred so an accidental empty
+// launch does not hide useful history.
+func (s *FileSessionStore) LoadLatest(workingDirectory string) (*PersistedSession, error) {
+	sessions, err := s.List(workingDirectory)
+	if err != nil {
+		return nil, err
+	}
+	var populated, empty []*PersistedSession
+	for _, state := range sessions {
 		if len(state.Messages) == 0 {
 			empty = append(empty, state)
 		} else {
@@ -302,12 +336,6 @@ func (s *FileSessionStore) LoadLatest(workingDirectory string) (*PersistedSessio
 	if len(candidates) == 0 {
 		return nil, ErrSessionNotFound
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].UpdatedAt.Equal(candidates[j].UpdatedAt) {
-			return candidates[i].ID > candidates[j].ID
-		}
-		return candidates[i].UpdatedAt.After(candidates[j].UpdatedAt)
-	})
 	return candidates[0], nil
 }
 

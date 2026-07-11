@@ -99,7 +99,7 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 
 	fmt.Fprintf(ui.out, "picode [%s] — type 'exit' or Ctrl-D to quit\n", session.SessionID())
 	ui.printHistory(session.History())
-	defer func() { ui.printSummary(session.Usage(), session.SessionID()) }()
+	defer func() { ui.printSummary(session.Usage(), session.SessionID(), len(session.History()) > 0) }()
 	for {
 		input := scannedInput
 		if editor != nil {
@@ -288,10 +288,13 @@ func (ui *PlainUI) printHistory(messages []Message) {
 }
 
 // printSummary renders the final session token counts.
-func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string) {
+func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string, resumable bool) {
 	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received\n",
 		usage.Total(), usage.Prompt-usage.Cached, usage.Cached, usage.Completion)
-	fmt.Fprintf(ui.out, "resume session with %spicode -resume %s%s\n\n", colorFaded, sessionID, colorReset)
+	if resumable {
+		fmt.Fprintf(ui.out, "resume session with %spicode -resume %s%s\n", colorFaded, sessionID, colorReset)
+	}
+	fmt.Fprintln(ui.out)
 }
 
 // printTruncated limits command output shown in the transcript.
