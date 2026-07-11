@@ -109,6 +109,9 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 	if len(toolCalls) > 0 {
 		message.ToolCalls = toolCalls
 	}
+	if c, ok := client.(*Client); ok {
+		c.Logger.LogResponse(message, usage, finish)
+	}
 	return message, usage, finish, nil
 }
 

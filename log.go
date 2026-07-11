@@ -76,6 +76,32 @@ func (l *RequestLogger) LogResponseError(status int, body string) {
 	l.writeFile(header, body)
 }
 
+// LogResponse records the completed model response assembled from the stream.
+func (l *RequestLogger) LogResponse(response any, usage *Usage, finishReason string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ts := time.Now().Format("15:04:05.000")
+	header := fmt.Sprintf("response #%d  %s", l.seq, ts)
+	payload := struct {
+		Response     any    `json:"response"`
+		FinishReason string `json:"finish_reason,omitempty"`
+		Usage        *Usage `json:"usage,omitempty"`
+	}{response, finishReason, usage}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		l.writeFile(header, fmt.Sprint(response))
+		return
+	}
+	var pretty json.RawMessage
+	if json.Unmarshal(raw, &pretty) == nil {
+		raw, _ = json.MarshalIndent(pretty, "", "  ")
+	}
+	l.writeFile(header, string(raw))
+}
+
 // LogEvent writes a free-form event line (e.g. session start/end) to the log
 // file.
 func (l *RequestLogger) LogEvent(msg string) {
