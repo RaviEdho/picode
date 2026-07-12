@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+const (
+	maxCommandOutput       = 1 << 20
+	commandOutputHeadBytes = maxCommandOutput / 2
+	commandOutputTailBytes = maxCommandOutput - commandOutputHeadBytes
+)
+
 var (
 	errToolCancelled = errors.New("tool cancelled by user")
 	errToolTimedOut  = errors.New("tool timed out")
@@ -26,7 +32,7 @@ func runCommandTool() Tool {
 			Description: "Execute a shell command on the user's local machine and return " +
 				"its combined stdout/stderr. " + shellSyntaxNote + " " +
 				"Use it to inspect the filesystem, run builds/tests, query git, read files, " +
-				"or apply changes. Use read_file for routine text-file inspection. There is a hard 30-second timeout per call; for long tasks " +
+				"or apply changes. Use read_file for routine text-file inspection. Output is capped at 1 MiB, with the beginning and end retained. There is a hard 30-second timeout per call; for long tasks " +
 				"redirect output and poll it in a later call. " +
 				"Output is trimmed of trailing whitespace. Prefer read-only investigative " +
 				"commands before making changes, and verify changes afterwards.",
@@ -70,10 +76,12 @@ func (e *ToolExecutor) executeRunCommand(ctx context.Context, tc ToolCall) ToolR
 func (e *ToolExecutor) CancelActive() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.cancel == nil {
+	if len(e.active) == 0 {
 		return false
 	}
-	e.cancel(errToolCancelled)
+	for _, cancel := range e.active {
+		cancel(errToolCancelled)
+	}
 	return true
 }
 
@@ -86,15 +94,11 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 	cmdCtx, cmdCancel := context.WithCancelCause(baseCtx)
 
 	// Publish this cancel function for the frontend's Ctrl-C handler.
-	e.mu.Lock()
-	e.cancel = cmdCancel
-	e.mu.Unlock()
+	commandID := e.registerActive(cmdCancel)
 
 	defer func() {
 		cmdCancel(nil)
-		e.mu.Lock()
-		e.cancel = nil
-		e.mu.Unlock()
+		e.unregisterActive(commandID)
 	}()
 
 	if cause := context.Cause(cmdCtx); cause != nil {
@@ -121,10 +125,10 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 	}
 
 	// Drain output concurrently so a cancelled process cannot block on I/O.
-	var buf bytes.Buffer
+	output := newBoundedCommandOutput()
 	copyDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(&buf, stdout)
+		_, _ = io.Copy(output, stdout)
 		close(copyDone)
 	}()
 
@@ -138,15 +142,56 @@ func (e *ToolExecutor) runShellCommand(ctx context.Context, command string) (str
 		if err != nil {
 			status = ToolFailed
 		}
-		return strings.TrimRight(buf.String(), "\n\t "), status, err
+		return output.String(), status, err
 	case <-cmdCtx.Done():
 		// Kill the group so child processes cannot survive cancellation.
 		killProcessGroup(cmd.Process.Pid)
 		<-waitCh
 		<-copyDone
 		status, err := commandCancellation(context.Cause(cmdCtx))
-		return strings.TrimRight(buf.String(), "\n\t "), status, err
+		return output.String(), status, err
 	}
+}
+
+type boundedCommandOutput struct {
+	head      bytes.Buffer
+	tail      []byte
+	truncated bool
+}
+
+func newBoundedCommandOutput() *boundedCommandOutput {
+	return &boundedCommandOutput{tail: make([]byte, 0, commandOutputTailBytes)}
+}
+
+func (o *boundedCommandOutput) Write(data []byte) (int, error) {
+	original := len(data)
+	if o.head.Len() < commandOutputHeadBytes {
+		n := commandOutputHeadBytes - o.head.Len()
+		if n > len(data) {
+			n = len(data)
+		}
+		_, _ = o.head.Write(data[:n])
+		data = data[n:]
+	}
+	if len(data) > 0 {
+		o.truncated = true
+		combined := append(o.tail, data...)
+		if len(combined) > commandOutputTailBytes {
+			combined = combined[len(combined)-commandOutputTailBytes:]
+		}
+		o.tail = append(o.tail[:0], combined...)
+	}
+	return original, nil
+}
+
+func (o *boundedCommandOutput) String() string {
+	value := o.head.String()
+	if o.truncated {
+		value += "\n[output truncated after 1 MiB]\n" + string(o.tail)
+	} else {
+		value += string(o.tail)
+	}
+	return strings.TrimRight(value, "\n\t ")
 }
 
 // commandCancellation maps a context cause to a stable tool result.

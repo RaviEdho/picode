@@ -37,7 +37,6 @@ func run() error {
 	serviceTier := flag.String("service-tier", defaults.ServiceTier, "service tier: auto, default, flex, or priority")
 	reasoningEffort := flag.String("reasoning-effort", defaults.ReasoningEffort, "reasoning effort: low, medium, or high")
 	verbosity := flag.String("verbosity", defaults.Verbosity, "response verbosity: low, medium, or high")
-	parallelToolCalls := flag.Bool("parallel-tool-calls", defaults.ParallelToolCalls, "allow multiple tool calls in one model response")
 	var resume resumeFlag
 	flag.Var(&resume, "resume", "resume the latest session, or a specific 12-character session ID")
 	if err := flag.CommandLine.Parse(normalizeResumeArgs(os.Args[1:])); err != nil {
@@ -50,7 +49,6 @@ func run() error {
 		Temperature: *temperature, TopP: *topP, MaxCompletionTokens: *maxCompletionTokens,
 		PresencePenalty: *presencePenalty, FrequencyPenalty: *frequencyPenalty,
 		ServiceTier: *serviceTier, ReasoningEffort: *reasoningEffort, Verbosity: *verbosity,
-		ParallelToolCalls: *parallelToolCalls,
 	}, *seed, explicit["seed"])
 	if err != nil {
 		return err

@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+const toolPreviewUpdateBytes = 64
+
+type streamedToolCall struct {
+	call          ToolCall
+	arguments     strings.Builder
+	lastPreview   string
+	lastPreviewAt int
+}
+
 // streamAssistant assembles a streamed response and emits UI updates.
 func streamAssistant(ctx context.Context, client ChatStreamer, history []Message, events EventSink) (*Message, *Usage, string, error) {
 	// Always finish the UI stream, including on errors and cancellation.
@@ -19,7 +28,7 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 
 	var (
 		content   strings.Builder
-		toolCalls []ToolCall
+		toolCalls []streamedToolCall
 		role      string
 		finish    string
 		usage     *Usage
@@ -68,26 +77,28 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 		// Tool calls can arrive as fragments across several chunks.
 		for _, tc := range delta.ToolCalls {
 			for len(toolCalls) <= tc.Index {
-				toolCalls = append(toolCalls, ToolCall{})
+				toolCalls = append(toolCalls, streamedToolCall{})
 			}
 			current := &toolCalls[tc.Index]
 			if tc.ID != "" {
-				current.ID = tc.ID
+				current.call.ID = tc.ID
 			}
 			if tc.Type != "" {
-				current.Type = tc.Type
+				current.call.Type = tc.Type
 			}
 			if tc.Function.Name != "" {
-				current.Function.Name = tc.Function.Name
+				current.call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				current.Function.Arguments += tc.Function.Arguments
+				_, _ = current.arguments.WriteString(tc.Function.Arguments)
 			}
-			events.Emit(ToolCallUpdateEvent{
-				Index: tc.Index,
-				Name:  current.Function.Name,
-				Input: displayToolInput(current.Function.Name, current.Function.Arguments),
-			})
+			arguments := current.arguments.String()
+			preview := displayToolInput(current.call.Function.Name, arguments)
+			if preview != current.lastPreview && (len(preview)-current.lastPreviewAt >= toolPreviewUpdateBytes || current.lastPreview == "") {
+				current.lastPreview = preview
+				current.lastPreviewAt = len(preview)
+				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Input: preview})
+			}
 		}
 	}
 
@@ -99,15 +110,18 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 	if role == "" {
 		role = "assistant"
 	}
+	finalToolCalls := make([]ToolCall, len(toolCalls))
 	for i := range toolCalls {
-		if toolCalls[i].Type == "" {
-			toolCalls[i].Type = "function"
+		if toolCalls[i].call.Type == "" {
+			toolCalls[i].call.Type = "function"
 		}
+		toolCalls[i].call.Function.Arguments = toolCalls[i].arguments.String()
+		finalToolCalls[i] = toolCalls[i].call
 	}
 
 	message := &Message{Role: role, Content: content.String()}
 	if len(toolCalls) > 0 {
-		message.ToolCalls = toolCalls
+		message.ToolCalls = finalToolCalls
 	}
 	if c, ok := client.(*Client); ok {
 		c.Logger.LogResponse(message, usage, finish)

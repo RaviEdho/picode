@@ -111,9 +111,10 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (
 			return true, nil
 		}
 
-		// Send each tool result back to the model before continuing.
-		for _, tc := range assistant.ToolCalls {
-			result := s.executor.Execute(ctx, tc)
+		// Execute read-only tools concurrently, while preserving result order.
+		results := s.executor.ExecuteBatch(ctx, assistant.ToolCalls)
+		for i, tc := range assistant.ToolCalls {
+			result := results[i]
 			s.logger.LogEvent(fmt.Sprintf("tool %s: input=%q status=%s output=(%d bytes)",
 				tc.Function.Name, result.Input, result.Status, len(result.Output)))
 

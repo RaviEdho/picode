@@ -17,7 +17,6 @@ type ChatCompletionRequest struct {
 	ServiceTier         string         `json:"service_tier,omitempty"`
 	ReasoningEffort     string         `json:"reasoning_effort,omitempty"`
 	Verbosity           string         `json:"verbosity,omitempty"`
-	ParallelToolCalls   bool           `json:"parallel_tool_calls"`
 }
 
 // LLMParameters contains request-level controls shared by every model call.
@@ -33,7 +32,6 @@ type LLMParameters struct {
 	ServiceTier         string
 	ReasoningEffort     string
 	Verbosity           string
-	ParallelToolCalls   bool
 }
 
 func defaultLLMParameters() LLMParameters {
@@ -41,10 +39,9 @@ func defaultLLMParameters() LLMParameters {
 		Temperature:         0.2,
 		TopP:                1,
 		MaxCompletionTokens: 16384,
-		ServiceTier:         "auto",
-		ReasoningEffort:     "low",
+		ServiceTier:         "flex",
+		ReasoningEffort:     "high",
 		Verbosity:           "low",
-		ParallelToolCalls:   false,
 	}
 }
 

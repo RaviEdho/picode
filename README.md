@@ -41,7 +41,7 @@ go run .
 | `-temperature` | `0.2` | Sampling randomness (0-2); lower is more predictable |
 | `-top-p` | `1` | Nucleus sampling (0-1); normally leave at 1 |
 | `-max-completion-tokens` | `16384` | Initial response-token limit |
-| `-reasoning-effort` | `low` | Reasoning level: `low`, `medium`, or `high` |
+| `-reasoning-effort` | `high` | Reasoning level: `low`, `medium`, or `high` |
 | `-verbosity` | `low` | Response detail: `low`, `medium`, or `high` |
 
 ### Advanced and provider-specific
@@ -51,8 +51,7 @@ go run .
 | `-presence-penalty` | `0` | Discourages staying on previously used topics (-2 to 2) |
 | `-frequency-penalty` | `0` | Discourages repeated tokens (-2 to 2) |
 | `-seed` | *(unset)* | Best-effort deterministic sampling seed |
-| `-service-tier` | `auto` | Provider tier: `auto`, `default`, `flex`, or `priority` |
-| `-parallel-tool-calls` | `false` | Allow multiple tool calls in one response |
+| `-service-tier` | `flex` | Provider tier: `auto`, `default`, `flex`, or `priority` |
  Run `picode -h` for flag syntax.
 
 ## Tools

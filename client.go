@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bufio"
@@ -99,7 +99,6 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		ServiceTier:         c.Parameters.ServiceTier,
 		ReasoningEffort:     c.Parameters.ReasoningEffort,
 		Verbosity:           c.Parameters.Verbosity,
-		ParallelToolCalls:   c.Parameters.ParallelToolCalls,
 		StreamOptions: &StreamOptions{
 			IncludeUsage: true,
 		},

@@ -177,16 +177,13 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		if !info.Mode().IsRegular() || info.Size() > searchMaxFileBytes {
 			return nil
 		}
-		matches, lines, err := searchFile(ctx, path, matcher)
+		remaining := args.MaxResults - matched
+		matches, lines, err := searchFile(ctx, path, matcher, remaining)
 		if err != nil {
 			return err
 		}
 		if len(matches) == 0 {
 			return nil
-		}
-		remaining := args.MaxResults - matched
-		if len(matches) > remaining {
-			matches = matches[:remaining]
 		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil {
@@ -221,7 +218,7 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 	return ToolResult{Input: args.Query, Output: output.String(), Status: ToolCompleted}
 }
 
-func searchFile(ctx context.Context, path string, matcher func(string) bool) ([]int, []string, error) {
+func searchFile(ctx context.Context, path string, matcher func(string) bool, maxMatches int) ([]int, []string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -255,6 +252,9 @@ func searchFile(ctx context.Context, path string, matcher func(string) bool) ([]
 		lines = append(lines, line)
 		if matcher(line) {
 			matches = append(matches, len(lines)-1)
+			if len(matches) >= maxMatches {
+				break
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
