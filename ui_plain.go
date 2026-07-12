@@ -208,8 +208,11 @@ func (ui *PlainUI) Emit(event UIEvent) {
 	case StreamFinishedEvent:
 		ui.stopSpinner()
 		for index, query := range ui.searchQuery {
+			if query == "" {
+				continue
+			}
 			fmt.Fprint(ui.out, query)
-			if path := ui.searchPath[index]; path != "" {
+			if path := ui.searchPath[index]; path != "" && path != "." {
 				fmt.Fprintf(ui.out, " %sin%s %s", colorYellow, colorReset, path)
 			}
 		}
