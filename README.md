@@ -51,7 +51,7 @@ go run .
 | `-presence-penalty` | `0` | Discourages staying on previously used topics (-2 to 2) |
 | `-frequency-penalty` | `0` | Discourages repeated tokens (-2 to 2) |
 | `-seed` | *(unset)* | Best-effort deterministic sampling seed |
-| `-service-tier` | `flex` | Provider tier: `auto`, `default`, `flex`, or `priority` |
+| `-service-tier` | `flex` | Provider tier: `none` omits it from the request; otherwise `auto`, `default`, `flex`, or `priority` |
  Run `picode -h` for flag syntax.
 
 ## Tools

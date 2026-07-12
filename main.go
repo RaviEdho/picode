@@ -34,7 +34,7 @@ func run() error {
 	presencePenalty := flag.Float64("presence-penalty", defaults.PresencePenalty, "presence penalty (-2 to 2)")
 	frequencyPenalty := flag.Float64("frequency-penalty", defaults.FrequencyPenalty, "frequency penalty (-2 to 2)")
 	seed := flag.Int64("seed", 0, "best-effort deterministic sampling seed")
-	serviceTier := flag.String("service-tier", defaults.ServiceTier, "service tier: auto, default, flex, or priority")
+	serviceTier := flag.String("service-tier", defaults.ServiceTier, "service tier: none, auto, default, flex, or priority")
 	reasoningEffort := flag.String("reasoning-effort", defaults.ReasoningEffort, "reasoning effort: low, medium, or high")
 	verbosity := flag.String("verbosity", defaults.Verbosity, "response verbosity: low, medium, or high")
 	var resume resumeFlag
