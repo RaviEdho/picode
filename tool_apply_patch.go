@@ -103,7 +103,8 @@ func (e *ToolExecutor) executeApplyPatch(ctx context.Context, tc ToolCall) ToolR
 	}
 
 	var output strings.Builder
-	output.WriteString("Done!")
+	additions, deletions := 0, 0
+	output.WriteString("Patch applied successfully.")
 	for _, plan := range plans {
 		marker := byte('M')
 		if plan.kind == patchAdd {
@@ -111,9 +112,51 @@ func (e *ToolExecutor) executeApplyPatch(ctx context.Context, tc ToolCall) ToolR
 		} else if plan.kind == patchDelete {
 			marker = 'D'
 		}
+		if plan.kind == patchAdd {
+			additions += countLines(plan.content)
+		} else if plan.kind == patchDelete {
+			deletions += countLines(plan.original)
+		} else {
+			additions += countLineDelta(plan.original, plan.content, true)
+			deletions += countLineDelta(plan.original, plan.content, false)
+		}
 		fmt.Fprintf(&output, "\n%c %s", marker, filepath.ToSlash(plan.path))
 	}
+	fmt.Fprintf(&output, "\nDiff summary: %d additions, %d deletions across %d files.", additions, deletions, len(plans))
 	return ToolResult{Input: args.Patch, Output: output.String(), Status: ToolCompleted}
+}
+
+func countLines(content []byte) int {
+	if len(content) == 0 {
+		return 0
+	}
+	return strings.Count(string(content), "\n") + 1
+}
+
+func countLineDelta(before, after []byte, additions bool) int {
+	oldLines := strings.Split(strings.ReplaceAll(string(before), "\r\n", "\n"), "\n")
+	newLines := strings.Split(strings.ReplaceAll(string(after), "\r\n", "\n"), "\n")
+	if len(oldLines) > 0 && oldLines[len(oldLines)-1] == "" {
+		oldLines = oldLines[:len(oldLines)-1]
+	}
+	if len(newLines) > 0 && newLines[len(newLines)-1] == "" {
+		newLines = newLines[:len(newLines)-1]
+	}
+	common := len(oldLines)
+	if len(newLines) < common {
+		common = len(newLines)
+	}
+	if additions {
+		return positiveDelta(len(newLines) - common)
+	}
+	return positiveDelta(len(oldLines) - common)
+}
+
+func positiveDelta(value int) int {
+	if value > 0 {
+		return value
+	}
+	return 0
 }
 
 func failedPatchResult(patch string, err error) ToolResult {
