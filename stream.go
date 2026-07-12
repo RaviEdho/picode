@@ -6,13 +6,10 @@ import (
 	"strings"
 )
 
-const toolPreviewUpdateBytes = 64
-
 type streamedToolCall struct {
-	call          ToolCall
-	arguments     strings.Builder
-	lastPreview   string
-	lastPreviewAt int
+	call        ToolCall
+	arguments   strings.Builder
+	lastPreview string
 }
 
 // streamAssistant assembles a streamed response and emits UI updates.
@@ -94,9 +91,11 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 			}
 			arguments := current.arguments.String()
 			preview := displayToolInput(current.call.Function.Name, arguments)
-			if preview != current.lastPreview && (len(preview)-current.lastPreviewAt >= toolPreviewUpdateBytes || current.lastPreview == "") {
+			// The preview is intentionally emitted whenever it changes. Tool
+			// arguments are streamed in small fragments, so a length threshold
+			// can leave short paths permanently truncated.
+			if preview != current.lastPreview {
 				current.lastPreview = preview
-				current.lastPreviewAt = len(preview)
 				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Input: preview})
 			}
 		}

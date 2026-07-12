@@ -125,9 +125,6 @@ func run() error {
 		Text:    state.System.BasePrompt,
 		Enabled: state.System.Enabled,
 	}
-	if prompt.Enabled && state.System.IncludeEnvironment {
-		prompt.Text += "\n\n" + buildEnvironmentBlock() + "\n\n" + buildWorkspaceBlock()
-	}
 
 	// A resumed session uses its saved model unless this invocation explicitly
 	// supplies a model override. Endpoints and credentials are never persisted.
