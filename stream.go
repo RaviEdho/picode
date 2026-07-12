@@ -120,6 +120,10 @@ func displayToolInput(name, arguments string) string {
 	field := "command"
 	if name == "apply_patch" {
 		field = "patch"
+	} else if name == "read_file" {
+		field = "path"
+	} else if name == "list_file" {
+		field = "path"
 	}
 	raw := extractStringValue(arguments, field)
 	command := unescapeJSONString(raw)

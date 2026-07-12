@@ -35,12 +35,16 @@ func NewToolExecutor() *ToolExecutor { return &ToolExecutor{} }
 
 // allTools returns every tool exposed to the model.
 func allTools() []Tool {
-	return []Tool{runCommandTool(), applyPatchTool()}
+	return []Tool{listFileTool(), readFileTool(), runCommandTool(), applyPatchTool()}
 }
 
 // Execute validates and runs one model tool call.
 func (e *ToolExecutor) Execute(ctx context.Context, tc ToolCall) ToolResult {
 	switch tc.Function.Name {
+	case "list_file":
+		return e.executeListFile(ctx, tc)
+	case "read_file":
+		return e.executeReadFile(ctx, tc)
 	case "run_command":
 		return e.executeRunCommand(ctx, tc)
 	case "apply_patch":

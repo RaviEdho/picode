@@ -26,7 +26,7 @@ func runCommandTool() Tool {
 			Description: "Execute a shell command on the user's local machine and return " +
 				"its combined stdout/stderr. " + shellSyntaxNote + " " +
 				"Use it to inspect the filesystem, run builds/tests, query git, read files, " +
-				"or apply changes. There is a hard 30-second timeout per call; for long tasks " +
+				"or apply changes. Use read_file for routine text-file inspection. There is a hard 30-second timeout per call; for long tasks " +
 				"redirect output and poll it in a later call. " +
 				"Output is trimmed of trailing whitespace. Prefer read-only investigative " +
 				"commands before making changes, and verify changes afterwards.",

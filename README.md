@@ -40,7 +40,7 @@ go run .
 |---|---|---|
 | `-temperature` | `0.2` | Sampling randomness (0-2); lower is more predictable |
 | `-top-p` | `1` | Nucleus sampling (0-1); normally leave at 1 |
-| `-max-completion-tokens` | `4096` | Initial response-token limit |
+| `-max-completion-tokens` | `16384` | Initial response-token limit |
 | `-reasoning-effort` | `low` | Reasoning level: `low`, `medium`, or `high` |
 | `-verbosity` | `low` | Response detail: `low`, `medium`, or `high` |
 
@@ -57,6 +57,8 @@ go run .
 
 ## Tools
 
+- `list_file` - list bounded directory contents with depth and entry limits.
+- `read_file` - read bounded, numbered ranges from UTF-8 text files.
 - `run_command` - execute local commands; 30-second timeout.
 - `apply_patch` - safely edit files with structured patches.
 - Windows commands use PowerShell; invoke `cmd.exe /d /c "..."` for Command Prompt.

@@ -114,7 +114,7 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (
 		// Send each tool result back to the model before continuing.
 		for _, tc := range assistant.ToolCalls {
 			result := s.executor.Execute(ctx, tc)
-			s.logger.LogEvent(fmt.Sprintf("tool %s: cmd=%q status=%s output=(%d bytes)",
+			s.logger.LogEvent(fmt.Sprintf("tool %s: input=%q status=%s output=(%d bytes)",
 				tc.Function.Name, result.Input, result.Status, len(result.Output)))
 
 			events.Emit(ToolResultEvent{
