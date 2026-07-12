@@ -10,6 +10,7 @@ type streamedToolCall struct {
 	call        ToolCall
 	arguments   strings.Builder
 	lastPreview string
+	nameEmitted bool
 }
 
 // streamAssistant assembles a streamed response and emits UI updates.
@@ -91,12 +92,23 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 			}
 			arguments := current.arguments.String()
 			preview := displayToolInput(current.call.Function.Name, arguments)
+			path := displayToolPath(current.call.Function.Name, arguments)
+			if current.call.Function.Name == "search" && path != "" {
+				preview += " in " + path
+			}
+			// Some providers send the tool name in an earlier delta than the
+			// first argument fragment. Emit that name immediately so the UI can
+			// show the tool prompt even when the initial preview is empty.
+			if current.call.Function.Name != "" && !current.nameEmitted {
+				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Path: path})
+				current.nameEmitted = true
+			}
 			// The preview is intentionally emitted whenever it changes. Tool
 			// arguments are streamed in small fragments, so a length threshold
 			// can leave short paths permanently truncated.
 			if preview != current.lastPreview {
 				current.lastPreview = preview
-				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Input: preview})
+				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Input: preview, Path: path})
 			}
 		}
 	}
@@ -137,6 +149,10 @@ func displayToolInput(name, arguments string) string {
 		field = "path"
 	} else if name == "list_file" {
 		field = "path"
+	} else if name == "search" {
+		// The query is the most useful part of a search call to show while
+		// its arguments are still being streamed.
+		field = "query"
 	}
 	raw := extractStringValue(arguments, field)
 	command := unescapeJSONString(raw)
@@ -148,6 +164,14 @@ func displayToolInput(name, arguments string) string {
 		return command[:len(command)-1]
 	}
 	return command
+}
+
+func displayToolPath(name, arguments string) string {
+	if name != "search" {
+		return ""
+	}
+	path := unescapeJSONString(extractStringValue(arguments, "path"))
+	return path
 }
 
 // extractStringValue reads a named field from partial JSON arguments.

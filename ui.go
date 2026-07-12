@@ -48,6 +48,7 @@ type ToolCallUpdateEvent struct {
 	Index int
 	Name  string
 	Input string
+	Path  string
 }
 
 // ToolResultEvent carries completed tool output.
