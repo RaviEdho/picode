@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bufio"
@@ -16,6 +16,7 @@ type Client struct {
 	BaseURL    string
 	APIKey     string
 	Model      string
+	Parameters LLMParameters
 	Tools      []Tool
 	HTTPClient *http.Client
 	Logger     *RequestLogger // nil when logging is disabled
@@ -23,9 +24,10 @@ type Client struct {
 
 func NewClient(baseURL, apiKey, model string) *Client {
 	return &Client{
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		Model:      model,
+		Parameters: defaultLLMParameters(),
 		HTTPClient: &http.Client{
 			Timeout: 300 * time.Second,
 		},
@@ -82,11 +84,22 @@ func (s *StreamReader) Close() error {
 // If the server does not support SSE (Content-Type is not text/event-stream),
 // the single JSON response is wrapped as one chunk so callers work uniformly.
 func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamReader, error) {
+
 	req := ChatCompletionRequest{
-		Model:    c.Model,
-		Messages: messages,
-		Tools:    c.Tools,
-		Stream:   true,
+		Model:               c.Model,
+		Messages:            messages,
+		Tools:               c.Tools,
+		Stream:              true,
+		Temperature:         c.Parameters.Temperature,
+		TopP:                c.Parameters.TopP,
+		MaxCompletionTokens: c.Parameters.MaxCompletionTokens,
+		PresencePenalty:     c.Parameters.PresencePenalty,
+		FrequencyPenalty:    c.Parameters.FrequencyPenalty,
+		Seed:                c.Parameters.Seed,
+		ServiceTier:         c.Parameters.ServiceTier,
+		ReasoningEffort:     c.Parameters.ReasoningEffort,
+		Verbosity:           c.Parameters.Verbosity,
+		ParallelToolCalls:   c.Parameters.ParallelToolCalls,
 		StreamOptions: &StreamOptions{
 			IncludeUsage: true,
 		},
@@ -97,7 +110,7 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// ── Log the full outgoing request ──
+	// Log the full outgoing request
 	c.Logger.LogRequest(body)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
@@ -119,7 +132,7 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		buf.ReadFrom(resp.Body)
 		resp.Body.Close()
 		errBody := buf.String()
-		// ── Log non-200 responses ──
+		// Log non-200 responses
 		c.Logger.LogResponseError(resp.StatusCode, errBody)
 		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, errBody)
 	}
@@ -151,7 +164,6 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	return &StreamReader{scanner: scanner, resp: resp}, nil
 }
-
 func toolCallsToDelta(tcs []ToolCall) []ToolCallDelta {
 	out := make([]ToolCallDelta, 0, len(tcs))
 	for i, tc := range tcs {

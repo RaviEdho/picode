@@ -25,10 +25,19 @@ func run() error {
 	model := flag.String("model", "", "model name (empty = server default)")
 	systemFlag := flag.String("system", "", "system prompt text (overrides the built-in default)")
 	systemFileFlag := flag.String("system-file", "", "path to a file containing the system prompt")
-	noSystem := flag.Bool("no-system", false, "send no system message (original harness behaviour)")
-	noEnvironment := flag.Bool("no-environment", false, "do not append runtime environment details to the system prompt")
 	logSession := flag.Bool("log", false, "log full request JSON to stderr and ~/.picode/logs/<timestamp>.log")
 	listSessions := flag.Bool("sessions", false, "list saved sessions for the current directory and exit")
+	defaults := defaultLLMParameters()
+	temperature := flag.Float64("temperature", defaults.Temperature, "sampling temperature (0 to 2)")
+	topP := flag.Float64("top-p", defaults.TopP, "nucleus sampling probability (0 to 1)")
+	maxCompletionTokens := flag.Int("max-completion-tokens", defaults.MaxCompletionTokens, "maximum tokens per model response")
+	presencePenalty := flag.Float64("presence-penalty", defaults.PresencePenalty, "presence penalty (-2 to 2)")
+	frequencyPenalty := flag.Float64("frequency-penalty", defaults.FrequencyPenalty, "frequency penalty (-2 to 2)")
+	seed := flag.Int64("seed", 0, "best-effort deterministic sampling seed")
+	serviceTier := flag.String("service-tier", defaults.ServiceTier, "service tier: auto, default, flex, or priority")
+	reasoningEffort := flag.String("reasoning-effort", defaults.ReasoningEffort, "reasoning effort: low, medium, or high")
+	verbosity := flag.String("verbosity", defaults.Verbosity, "response verbosity: low, medium, or high")
+	parallelToolCalls := flag.Bool("parallel-tool-calls", defaults.ParallelToolCalls, "allow multiple tool calls in one model response")
 	var resume resumeFlag
 	flag.Var(&resume, "resume", "resume the latest session, or a specific 12-character session ID")
 	if err := flag.CommandLine.Parse(normalizeResumeArgs(os.Args[1:])); err != nil {
@@ -37,9 +46,18 @@ func run() error {
 
 	explicit := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	parameters, err := resolveLLMParameters(LLMParameters{
+		Temperature: *temperature, TopP: *topP, MaxCompletionTokens: *maxCompletionTokens,
+		PresencePenalty: *presencePenalty, FrequencyPenalty: *frequencyPenalty,
+		ServiceTier: *serviceTier, ReasoningEffort: *reasoningEffort, Verbosity: *verbosity,
+		ParallelToolCalls: *parallelToolCalls,
+	}, *seed, explicit["seed"])
+	if err != nil {
+		return err
+	}
 	resuming := resume.Enabled
 	if resuming {
-		for _, name := range []string{"system", "system-file", "no-system", "no-environment"} {
+		for _, name := range []string{"system", "system-file"} {
 			if explicit[name] {
 				return fmt.Errorf("-%s cannot be used when resuming a session", name)
 			}
@@ -75,11 +93,11 @@ func run() error {
 			return fmt.Errorf("no saved sessions to resume in %q", workingDirectory)
 		}
 	} else {
-		prompt, promptErr := resolveSystemPrompt(*noSystem, *systemFlag, *systemFileFlag)
+		prompt, promptErr := resolveSystemPrompt(*systemFlag, *systemFileFlag)
 		if promptErr != nil {
 			return promptErr
 		}
-		state, lock, err = createAutomaticSession(store, prompt, !*noEnvironment, *model, workingDirectory)
+		state, lock, err = createAutomaticSession(store, prompt, true, *model, workingDirectory)
 		startupWarnings = append(startupWarnings, prompt.Warnings...)
 	}
 	if err != nil {
@@ -144,6 +162,7 @@ func run() error {
 	}
 
 	client := NewClient(*baseURL, *apiKey, selectedModel)
+	client.Parameters = parameters
 	client.Logger = logger
 	client.Tools = allTools()
 

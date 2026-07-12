@@ -44,12 +44,7 @@ type PromptResolution struct {
 }
 
 // resolveSystemPrompt applies flag, environment, then built-in precedence.
-func resolveSystemPrompt(noSystem bool, systemFlag, systemFileFlag string) (PromptResolution, error) {
-	// -no-system overrides every other prompt source.
-	if noSystem {
-		return PromptResolution{}, nil
-	}
-
+func resolveSystemPrompt(systemFlag, systemFileFlag string) (PromptResolution, error) {
 	// Explicit flags take priority over environment variables.
 	if value := strings.TrimSpace(systemFlag); value != "" {
 		return PromptResolution{Text: value, Enabled: true}, nil

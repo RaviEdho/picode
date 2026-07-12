@@ -3,13 +3,49 @@ package main
 // OpenAI-compatible request/response types
 
 type ChatCompletionRequest struct {
-	Model           string         `json:"model"`
-	Messages        []Message      `json:"messages"`
-	Tools           []Tool         `json:"tools,omitempty"`
-	Stream          bool           `json:"stream"`
-	StreamOptions   *StreamOptions `json:"stream_options,omitempty"`
-	ServiceTier     string         `json:"service_tier,omitempty"`
-	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	Model               string         `json:"model"`
+	Messages            []Message      `json:"messages"`
+	Tools               []Tool         `json:"tools,omitempty"`
+	Stream              bool           `json:"stream"`
+	StreamOptions       *StreamOptions `json:"stream_options,omitempty"`
+	Temperature         float64        `json:"temperature"`
+	TopP                float64        `json:"top_p"`
+	MaxCompletionTokens int            `json:"max_completion_tokens"`
+	PresencePenalty     float64        `json:"presence_penalty"`
+	FrequencyPenalty    float64        `json:"frequency_penalty"`
+	Seed                *int64         `json:"seed,omitempty"`
+	ServiceTier         string         `json:"service_tier,omitempty"`
+	ReasoningEffort     string         `json:"reasoning_effort,omitempty"`
+	Verbosity           string         `json:"verbosity,omitempty"`
+	ParallelToolCalls   bool           `json:"parallel_tool_calls"`
+}
+
+// LLMParameters contains request-level controls shared by every model call.
+// The defaults favor concise, inexpensive coding responses without removing
+// access to tools or limiting a normal multi-step response.
+type LLMParameters struct {
+	Temperature         float64
+	TopP                float64
+	MaxCompletionTokens int
+	PresencePenalty     float64
+	FrequencyPenalty    float64
+	Seed                *int64
+	ServiceTier         string
+	ReasoningEffort     string
+	Verbosity           string
+	ParallelToolCalls   bool
+}
+
+func defaultLLMParameters() LLMParameters {
+	return LLMParameters{
+		Temperature:         0.2,
+		TopP:                1,
+		MaxCompletionTokens: 4096,
+		ServiceTier:         "auto",
+		ReasoningEffort:     "low",
+		Verbosity:           "low",
+		ParallelToolCalls:   false,
+	}
 }
 
 type StreamOptions struct {
