@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -93,9 +94,6 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 			arguments := current.arguments.String()
 			preview := displayToolInput(current.call.Function.Name, arguments)
 			path := displayToolPath(current.call.Function.Name, arguments)
-			if current.call.Function.Name == "search" && path != "" {
-				preview += " in " + path
-			}
 			// Some providers send the tool name in an earlier delta than the
 			// first argument fragment. Emit that name immediately so the UI can
 			// show the tool prompt even when the initial preview is empty.
@@ -142,6 +140,10 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 
 // displayToolInput decodes the primary argument while its JSON is streaming.
 func displayToolInput(name, arguments string) string {
+	if name == "search" {
+		return displaySearchToolInput(arguments)
+	}
+
 	field := "command"
 	if name == "apply_patch" {
 		field = "patch"
@@ -149,21 +151,39 @@ func displayToolInput(name, arguments string) string {
 		field = "path"
 	} else if name == "list_file" {
 		field = "path"
-	} else if name == "search" {
-		// The query is the most useful part of a search call to show while
-		// its arguments are still being streamed.
-		field = "query"
 	}
 	raw := extractStringValue(arguments, field)
-	command := unescapeJSONString(raw)
+	return displayJSONStringValue(raw)
+}
+
+func displaySearchToolInput(arguments string) string {
+	raw, queryClosed := extractStringValuePartial(arguments, "query")
+	if raw == "" && !queryClosed {
+		return ""
+	}
+
+	query := displayJSONStringValue(raw)
+	if !queryClosed {
+		return strings.TrimSuffix(strconv.Quote(query), "\"")
+	}
+
+	input := strconv.Quote(query)
+	if path := displayToolPath("search", arguments); path != "" {
+		input += " in " + path
+	}
+	return input
+}
+
+func displayJSONStringValue(raw string) string {
+	value := unescapeJSONString(raw)
 	trailing := 0
 	for i := len(raw) - 1; i >= 0 && raw[i] == '\\'; i-- {
 		trailing++
 	}
-	if trailing%2 == 1 && len(command) > 0 {
-		return command[:len(command)-1]
+	if trailing%2 == 1 && len(value) > 0 {
+		value = value[:len(value)-1]
 	}
-	return command
+	return value
 }
 
 func displayToolPath(name, arguments string) string {
@@ -176,19 +196,24 @@ func displayToolPath(name, arguments string) string {
 
 // extractStringValue reads a named field from partial JSON arguments.
 func extractStringValue(args, field string) string {
+	value, _ := extractStringValuePartial(args, field)
+	return value
+}
+
+func extractStringValuePartial(args, field string) (string, bool) {
 	key := `"` + field + `"`
 	idx := strings.Index(args, key)
 	if idx < 0 {
-		return ""
+		return "", false
 	}
 	rest := args[idx+len(key):]
 	rest = strings.TrimLeft(rest, " \t\r\n")
 	if !strings.HasPrefix(rest, ":") {
-		return ""
+		return "", false
 	}
 	rest = strings.TrimLeft(rest[1:], " \t\r\n")
 	if len(rest) == 0 || rest[0] != '"' {
-		return ""
+		return "", false
 	}
 	rest = rest[1:]
 	// Stop only at a quote that is not escaped.
@@ -203,10 +228,10 @@ func extractStringValue(args, field string) string {
 			continue
 		}
 		if char == '"' {
-			return rest[:i]
+			return rest[:i], true
 		}
 	}
-	return rest
+	return rest, false
 }
 
 // unescapeJSONString decodes common escapes for live display.

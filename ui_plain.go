@@ -39,9 +39,6 @@ type PlainUI struct {
 	toolOpen      bool
 	printedTools  map[int]bool
 	printedCmdLen map[int]int
-	printedPath   map[int]bool
-	searchQuery   map[int]string
-	searchPath    map[int]string
 }
 
 // NewPlainUI creates a frontend around injectable terminal streams.
@@ -186,36 +183,11 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		}
 		printed := ui.printedCmdLen[event.Index]
 		if len(event.Input) > printed {
-			if event.Name == "search" && event.Path != "" {
-				input := event.Input
-				suffix := " in " + event.Path
-				if strings.HasSuffix(input, suffix) {
-					queryEnd := len(input) - len(suffix)
-					ui.searchQuery[event.Index] = input[:queryEnd]
-					ui.searchPath[event.Index] = event.Path
-				} else {
-					ui.searchQuery[event.Index] = input
-				}
-			} else {
-				if event.Name == "search" {
-					ui.searchQuery[event.Index] = event.Input
-				} else {
-					fmt.Fprint(ui.out, event.Input[printed:])
-				}
-			}
+			fmt.Fprint(ui.out, event.Input[printed:])
 			ui.printedCmdLen[event.Index] = len(event.Input)
 		}
 	case StreamFinishedEvent:
 		ui.stopSpinner()
-		for index, query := range ui.searchQuery {
-			if query == "" {
-				continue
-			}
-			fmt.Fprint(ui.out, query)
-			if path := ui.searchPath[index]; path != "" && path != "." {
-				fmt.Fprintf(ui.out, " %sin%s %s", colorYellow, colorReset, path)
-			}
-		}
 		if ui.textOpen {
 			fmt.Fprintln(ui.out)
 		}
@@ -242,9 +214,6 @@ func (ui *PlainUI) resetResponseState() {
 	ui.toolOpen = false
 	ui.printedTools = make(map[int]bool)
 	ui.printedCmdLen = make(map[int]int)
-	ui.printedPath = make(map[int]bool)
-	ui.searchQuery = make(map[int]string)
-	ui.searchPath = make(map[int]string)
 }
 
 // stopSpinner is safe to call after the spinner has already stopped.
