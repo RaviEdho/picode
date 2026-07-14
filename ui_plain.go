@@ -228,11 +228,7 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		if event.Status == ToolCancelled {
 			fmt.Fprintf(ui.out, "%s^C cancelled %s%s\n", colorYellow, event.Name, colorReset)
 		}
-		if event.Name == "workspace" {
-			fmt.Fprint(ui.out, " ")
-		} else {
-			fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
-		}
+		fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
 		printTruncated(ui.out, event.Output, 5, colorFaded)
 		fmt.Fprintln(ui.out)
 	case EmptyResponseEvent:

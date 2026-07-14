@@ -76,7 +76,7 @@ func toolMutatesWorkspace(name string) bool { return name == "apply_patch" || na
 
 // allTools returns every tool exposed to the model.
 func allTools() []Tool {
-	return []Tool{workspaceTool(), listFileTool(), readFileTool(), searchTool(), runCommandTool(), applyPatchTool()}
+	return []Tool{listFileTool(), readFileTool(), searchTool(), runCommandTool(), applyPatchTool()}
 }
 
 // Execute validates and runs one model tool call.
@@ -84,8 +84,6 @@ func (e *ToolExecutor) Execute(ctx context.Context, tc ToolCall) ToolResult {
 	switch tc.Function.Name {
 	case "list_file":
 		return e.executeListFile(ctx, tc)
-	case "workspace":
-		return e.executeWorkspace(ctx, tc)
 	case "read_file":
 		return e.executeReadFile(ctx, tc)
 	case "search":
