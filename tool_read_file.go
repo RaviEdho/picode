@@ -20,9 +20,7 @@ const (
 	readFileMaxOutput    = 32 * 1024
 )
 
-// readFileTool returns a bounded, line-numbered file-reading tool. Keeping
-// this separate from run_command prevents routine inspection from spending
-// tokens on shell syntax and unbounded command output.
+// readFileTool returns bounded, numbered text without the shell overhead of run_command.
 func readFileTool() Tool {
 	return Tool{
 		Type: "function",
@@ -131,9 +129,7 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 		}
 		lineNumber++
 		if !utf8.ValidString(line) {
-			// A bounded prefix can end in the middle of a multi-byte rune.
-			// Remove only that incomplete suffix; malformed bytes elsewhere still
-			// cause the file to be rejected.
+			// Trim only an incomplete rune at the bounded suffix; reject malformed bytes elsewhere.
 			if lineTruncated {
 				line = trimIncompleteUTF8Suffix(line)
 			}
@@ -219,8 +215,7 @@ func safeReadFilePath(root, name string) (string, error) {
 	return resolved, nil
 }
 
-// readBoundedLine consumes one complete line while retaining only a bounded
-// prefix, so a pathological single line cannot exhaust memory.
+// readBoundedLine consumes a complete line but retains a bounded prefix to cap memory use.
 func readBoundedLine(reader *bufio.Reader) (string, bool, error) {
 	line := make([]byte, 0, readFileMaxLineBytes)
 	truncated := false

@@ -13,10 +13,12 @@ type PersistentConversation struct {
 	state   *PersistedSession
 }
 
+// NewPersistentConversation wraps a session with save-after-commit persistence.
 func NewPersistentConversation(session *Session, store *FileSessionStore, state *PersistedSession) *PersistentConversation {
 	return &PersistentConversation{session: session, store: store, state: state}
 }
 
+// RunTurn saves the conversation after the session commits a complete turn.
 func (p *PersistentConversation) RunTurn(ctx context.Context, input string, events EventSink) error {
 	committed, err := p.session.RunTurn(ctx, input, events)
 	if err != nil || !committed {

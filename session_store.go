@@ -26,8 +26,7 @@ var (
 	ErrSessionWrongDir = errors.New("session belongs to a different working directory")
 )
 
-// PersistedSystem stores only stable prompt configuration. Runtime environment
-// details are rebuilt whenever a session is resumed.
+// PersistedSystem stores stable prompt configuration; runtime details are rebuilt when resumed.
 type PersistedSystem struct {
 	Enabled            bool   `json:"enabled"`
 	BasePrompt         string `json:"base_prompt,omitempty"`
@@ -57,6 +56,7 @@ type FileSessionStore struct {
 	dir string
 }
 
+// NewFileSessionStore creates or secures a session directory.
 func NewFileSessionStore(dir string) (*FileSessionStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create session directory: %w", err)
@@ -67,6 +67,7 @@ func NewFileSessionStore(dir string) (*FileSessionStore, error) {
 	return &FileSessionStore{dir: dir}, nil
 }
 
+// NewDefaultFileSessionStore opens the session store under the user's private Picode data directory.
 func NewDefaultFileSessionStore() (*FileSessionStore, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -82,8 +83,7 @@ func NewDefaultFileSessionStore() (*FileSessionStore, error) {
 	return NewFileSessionStore(filepath.Join(root, "sessions"))
 }
 
-// currentWorkingDirectory returns a stable absolute path for session scoping.
-// Resolving symlinks makes equivalent paths compare consistently.
+// currentWorkingDirectory resolves symlinks to produce a stable absolute path for session scoping.
 func currentWorkingDirectory() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -281,9 +281,7 @@ func (s *FileSessionStore) Load(id string) (*PersistedSession, error) {
 	return state, nil
 }
 
-// List returns every valid session for a working directory, newest first.
-// Unreadable or invalid files are ignored so one damaged session does not make
-// the rest of the session history inaccessible.
+// List returns valid sessions for a working directory newest first, ignoring unreadable or invalid files.
 func (s *FileSessionStore) List(workingDirectory string) ([]*PersistedSession, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -313,9 +311,7 @@ func (s *FileSessionStore) List(workingDirectory string) ([]*PersistedSession, e
 	return sessions, nil
 }
 
-// LoadLatest returns the most recently updated valid session from the given
-// working directory. Populated sessions are preferred so an accidental empty
-// launch does not hide useful history.
+// LoadLatest returns the latest valid session, preferring populated sessions over accidental empty launches.
 func (s *FileSessionStore) LoadLatest(workingDirectory string) (*PersistedSession, error) {
 	sessions, err := s.List(workingDirectory)
 	if err != nil {

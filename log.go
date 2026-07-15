@@ -9,18 +9,14 @@ import (
 	"time"
 )
 
-// RequestLogger writes each outgoing chat-completion request (and any error
-// responses) to a session log file. A nil *RequestLogger is a valid no-op so
-// callers don't need nil checks.
+// RequestLogger writes chat requests and responses to a session file; nil receivers are safe no-ops.
 type RequestLogger struct {
 	mu   sync.Mutex
 	file *os.File
-	seq  int // monotonic request counter within the session
+	seq  int // Monotonic request counter within the session.
 }
 
-// NewRequestLogger creates a log file under ~/.picode/logs/ (creating the
-// directory if needed) and returns a logger that writes to that file.
-// The filename includes a timestamp so each session gets its own file.
+// NewRequestLogger creates a timestamped session log under ~/.picode/logs/.
 func NewRequestLogger() (*RequestLogger, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -39,8 +35,7 @@ func NewRequestLogger() (*RequestLogger, error) {
 	return &RequestLogger{file: f}, nil
 }
 
-// LogRequest pretty-prints the full JSON request body to the log file,
-// preceded by a timestamp and sequence number.
+// LogRequest writes a timestamped, pretty-printed JSON request body.
 func (l *RequestLogger) LogRequest(raw []byte) {
 	if l == nil {
 		return
@@ -51,11 +46,10 @@ func (l *RequestLogger) LogRequest(raw []byte) {
 	l.seq++
 	ts := time.Now().Format("15:04:05.000")
 
-	// Pretty-print for readability.
 	var pretty json.RawMessage
 	header := fmt.Sprintf("─── request #%d  %s ───", l.seq, ts)
 	if err := json.Unmarshal(raw, &pretty); err != nil {
-		// Fallback: dump raw.
+		// Preserve malformed payloads verbatim for diagnosis.
 		l.writeFile(header, string(raw))
 		return
 	}
@@ -102,8 +96,7 @@ func (l *RequestLogger) LogResponse(response any, usage *Usage, finishReason str
 	l.writeFile(header, string(raw))
 }
 
-// LogEvent writes a free-form event line (e.g. session start/end) to the log
-// file.
+// LogEvent writes a free-form event such as session start or end to the log file.
 func (l *RequestLogger) LogEvent(msg string) {
 	if l == nil {
 		return

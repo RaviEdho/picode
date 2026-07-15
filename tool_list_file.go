@@ -20,8 +20,7 @@ const (
 	listFileMaxOutput      = 32 * 1024
 )
 
-// listFileTool returns a bounded directory listing tool. It deliberately
-// avoids shell syntax and metadata noise for common repository inspection.
+// listFileTool returns a bounded directory listing without shell syntax or metadata noise.
 func listFileTool() Tool {
 	return Tool{
 		Type: "function",

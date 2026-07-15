@@ -450,8 +450,7 @@ func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
 		return err
 	}
 
-	// Rename the old file aside first instead of relying on rename-overwrite,
-	// which is not supported consistently on Windows.
+	// Move the old file aside because rename-overwrite is inconsistent on Windows.
 	var backupName string
 	if _, err := os.Lstat(path); err == nil {
 		backup, err := os.CreateTemp(filepath.Dir(path), ".picode-backup-*")

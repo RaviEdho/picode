@@ -258,8 +258,7 @@ func searchFile(ctx context.Context, path string, matcher func(string) bool, max
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		// An unusually long line is not useful search input, but should not make
-		// an otherwise valid repository search fail.
+		// Skip unusually long lines rather than failing an otherwise valid repository search.
 		if errors.Is(err, bufio.ErrTooLong) {
 			return nil, nil, nil
 		}

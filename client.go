@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// Client sends OpenAI-compatible chat completion requests.
 type Client struct {
 	BaseURL    string
 	APIKey     string
@@ -22,6 +23,7 @@ type Client struct {
 	Logger     *RequestLogger // nil when logging is disabled
 }
 
+// NewClient creates a client with default model parameters and a five-minute HTTP timeout.
 func NewClient(baseURL, apiKey, model string) *Client {
 	return &Client{
 		BaseURL:    baseURL,
@@ -34,8 +36,7 @@ func NewClient(baseURL, apiKey, model string) *Client {
 	}
 }
 
-// StreamReader abstracts over both real SSE streams and a non-streaming
-// JSON response wrapped as a single chunk.
+// StreamReader presents SSE streams and single JSON responses through the same interface.
 type StreamReader struct {
 	scanner    *bufio.Scanner
 	resp       *http.Response
@@ -73,6 +74,7 @@ func (s *StreamReader) Recv() (*ChatCompletionChunk, error) {
 	return nil, io.EOF
 }
 
+// Close releases the underlying HTTP response body, if any.
 func (s *StreamReader) Close() error {
 	if s.resp != nil {
 		return s.resp.Body.Close()
@@ -80,9 +82,7 @@ func (s *StreamReader) Close() error {
 	return nil
 }
 
-// StreamChat sends the request with streaming enabled and returns a StreamReader.
-// If the server does not support SSE (Content-Type is not text/event-stream),
-// the single JSON response is wrapped as one chunk so callers work uniformly.
+// StreamChat requests a streamed completion, wrapping non-SSE JSON responses as a single chunk.
 func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamReader, error) {
 
 	req := ChatCompletionRequest{
@@ -109,7 +109,7 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// Log the full outgoing request
+	// Log the complete payload before transport errors can occur.
 	c.Logger.LogRequest(body)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
@@ -131,7 +131,6 @@ func (c *Client) StreamChat(ctx context.Context, messages []Message) (*StreamRea
 		buf.ReadFrom(resp.Body)
 		resp.Body.Close()
 		errBody := buf.String()
-		// Log non-200 responses
 		c.Logger.LogResponseError(resp.StatusCode, errBody)
 		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, errBody)
 	}

@@ -17,16 +17,14 @@ if (-not $picodeSucceeded) {
 }
 `
 
-// newShellCommand sends the script over stdin so it is parsed only by
-// PowerShell, avoiding the fragile cmd.exe -> PowerShell quoting boundary.
+// newShellCommand sends the script over stdin to avoid a cmd.exe-to-PowerShell quoting boundary.
 func newShellCommand(command string) *exec.Cmd {
 	cmd := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-")
 	cmd.Stdin = strings.NewReader("$ErrorActionPreference = 'Stop'\n" + command + powerShellEpilogue)
 	return cmd
 }
 
-// sysProcAttrNewProcessGroup puts the child in a new process group on Windows
-// so taskkill can target the whole tree later.
+// sysProcAttrNewProcessGroup lets taskkill target the entire child process tree.
 func sysProcAttrNewProcessGroup() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 }

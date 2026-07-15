@@ -21,10 +21,7 @@ func friendlyOS() string {
 	}
 }
 
-// shellInfo returns the interpreter, the flag used to pass a command to it, and
-// a human-readable trailing hint describing the shell syntax the model should
-// use. The hint does NOT repeat the interpreter (callers compose "via `interp
-// flag`") so it reads cleanly in both the system prompt and the tool schema.
+// shellInfo returns the interpreter, command flag, and a syntax hint that does not repeat the interpreter.
 func shellInfo() (interpreter, flag, syntaxHint string) {
 	if runtime.GOOS == "windows" {
 		return "powershell.exe", "-NoLogo -NoProfile -NonInteractive -Command -",
@@ -36,8 +33,7 @@ func shellInfo() (interpreter, flag, syntaxHint string) {
 		"Use POSIX shell syntax (&&, |, 2>&1, etc.)."
 }
 
-// shellCommandDescription returns OS-appropriate guidance for the command
-// argument in the run_command tool schema.
+// shellCommandDescription returns OS-appropriate guidance for the run_command argument.
 func shellCommandDescription() string {
 	if runtime.GOOS == "windows" {
 		return "The complete Windows PowerShell script to execute. Use pipelines, semicolons, " +
@@ -47,10 +43,7 @@ func shellCommandDescription() string {
 		"and use 2>&1 to capture stderr."
 }
 
-// buildEnvironmentBlock produces a short Markdown section describing the
-// runtime environment. It is captured once at startup. The date changes only
-// once per day, which permits substantially more cross-session prompt caching
-// than a session timestamp.
+// buildEnvironmentBlock captures a short Markdown runtime summary whose day-level date supports prompt caching.
 func buildEnvironmentBlock() string {
 	interp, flag, syntaxHint := shellInfo()
 	shellPhrase := interp + " " + flag

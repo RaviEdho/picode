@@ -48,7 +48,7 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 		if err != nil {
 			return nil, nil, "", err
 		}
-		// The first server chunk changes the visible status to thinking.
+		// The first server chunk advances the visible status to thinking.
 		if !gotFirstChunk {
 			gotFirstChunk = true
 			events.Emit(StatusEvent{Phase: StatusThinking})
@@ -73,7 +73,7 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 			content.WriteString(delta.Content)
 			events.Emit(AssistantDeltaEvent{Text: delta.Content})
 		}
-		// Tool calls can arrive as fragments across several chunks.
+		// Assemble tool calls that arrive as fragments across multiple chunks.
 		for _, tc := range delta.ToolCalls {
 			for len(toolCalls) <= tc.Index {
 				toolCalls = append(toolCalls, streamedToolCall{})
@@ -94,16 +94,12 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 			arguments := current.arguments.String()
 			preview := displayToolInput(current.call.Function.Name, arguments)
 			path := displayToolPath(current.call.Function.Name, arguments)
-			// Some providers send the tool name in an earlier delta than the
-			// first argument fragment. Emit that name immediately so the UI can
-			// show the tool prompt even when the initial preview is empty.
+			// Emit an early tool name even when its first argument fragment has not arrived.
 			if current.call.Function.Name != "" && !current.nameEmitted {
 				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Path: path})
 				current.nameEmitted = true
 			}
-			// The preview is intentionally emitted whenever it changes. Tool
-			// arguments are streamed in small fragments, so a length threshold
-			// can leave short paths permanently truncated.
+			// Emit every preview change because a length threshold can leave short streamed paths truncated.
 			if preview != current.lastPreview {
 				current.lastPreview = preview
 				events.Emit(ToolCallUpdateEvent{Index: tc.Index, Name: current.call.Function.Name, Input: preview, Path: path})

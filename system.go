@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// defaultSystemPrompt is the baked-in system prompt sent to the model when the
-// user does not override it via flags or environment variables.
+// defaultSystemPrompt is sent when flags and environment variables provide no override.
 const defaultSystemPrompt = `# Role
 You are Picode, a local terminal coding assistant. Inspect, modify, and debug the user's files using the available tools.
 

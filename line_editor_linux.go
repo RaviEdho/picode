@@ -190,9 +190,7 @@ func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 		columns = 80
 	}
 
-	// Return to the beginning of the previously rendered input before clearing.
-	// A bare carriage return only reaches the start of the current visual row,
-	// which caused wrapped input to be appended to and redrawn repeatedly.
+	// Move to the first rendered row because a carriage return only reaches the current visual row.
 	fmt.Fprint(e.out, "\r")
 	if e.renderCursorRow > 0 {
 		fmt.Fprintf(e.out, "\033[%dA", e.renderCursorRow)
@@ -205,8 +203,7 @@ func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	endRow := occupiedRow(totalWidth, columns)
 	cursorRow, cursorColumn := cursorPosition(cursorWidth, totalWidth, columns)
 
-	// Position from the end of the rendered text rather than moving left: left
-	// movement does not cross terminal rows consistently.
+	// Position from the rendered end because leftward cursor movement does not cross rows consistently.
 	fmt.Fprint(e.out, "\r")
 	if endRow > cursorRow {
 		fmt.Fprintf(e.out, "\033[%dA", endRow-cursorRow)
@@ -248,8 +245,7 @@ func occupiedRow(width, columns int) int {
 }
 
 func cursorPosition(cursorWidth, totalWidth, columns int) (row, column int) {
-	// At the exact right edge, terminals retain the cursor in the final column
-	// until another printable character triggers wrapping.
+	// At the exact right edge, terminals retain the cursor in the final column until another character wraps.
 	if cursorWidth == totalWidth && cursorWidth > 0 && cursorWidth%columns == 0 {
 		return (cursorWidth - 1) / columns, columns - 1
 	}
@@ -283,8 +279,7 @@ func ansiDisplayWidth(value string) int {
 }
 
 func runeDisplayWidth(value []rune) int {
-	// Keep the editor's existing rune-based cursor model. This correctly handles
-	// UTF-8 input; combining and double-width glyphs remain a display limitation.
+	// The rune-based cursor model handles UTF-8 but not combining or double-width glyphs.
 	return len(value)
 }
 

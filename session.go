@@ -65,16 +65,14 @@ func NewSession(client ChatStreamer, executor *ToolExecutor, prompt PromptResolu
 	return s
 }
 
-// RunTurn processes one user message through its final model response. The
-// committed result is true only when a complete turn was added to history.
+// RunTurn processes one user message and reports whether a complete turn was committed to history.
 func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (committed bool, err error) {
 	if !s.busy.CompareAndSwap(false, true) {
 		return false, ErrSessionBusy
 	}
 	defer s.busy.Store(false)
 
-	// Treat a turn as a transaction so failed and cancelled tool round trips
-	// can never leave malformed resumable history behind.
+	// Roll back history and usage when a failed or cancelled tool round trip leaves the turn incomplete.
 	turnStart := len(s.history)
 	usageStart := s.Usage()
 	defer func() {
@@ -86,14 +84,13 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (
 	s.history = append(s.history, Message{Role: "user", Content: input})
 
 	for {
-		// Rebuild the request so the system message always stays first.
+		// Rebuild each request so the system message remains first.
 		messages := make([]Message, 0, len(s.history)+1)
 		if s.systemEnabled {
 			messages = append(messages, s.systemMessage)
 		}
 		messages = append(messages, s.history...)
 
-		// One turn may require several model requests around tool calls.
 		assistant, usage, finishReason, err := streamAssistant(ctx, s.client, messages, events)
 		if err != nil {
 			return false, err
@@ -111,7 +108,7 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (
 			return true, nil
 		}
 
-		// Execute read-only tools concurrently, while preserving result order.
+		// Execute independent reads concurrently while retaining model-provided result order.
 		results := s.executor.ExecuteBatch(ctx, assistant.ToolCalls)
 		for i, tc := range assistant.ToolCalls {
 			result := results[i]

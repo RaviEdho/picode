@@ -1,6 +1,6 @@
 package main
 
-// OpenAI-compatible request/response types
+// This file defines OpenAI-compatible request and response payloads.
 
 type ChatCompletionRequest struct {
 	Model               string         `json:"model"`
@@ -19,9 +19,7 @@ type ChatCompletionRequest struct {
 	Verbosity           string         `json:"verbosity,omitempty"`
 }
 
-// LLMParameters contains request-level controls shared by every model call.
-// The defaults favor concise, inexpensive coding responses without removing
-// access to tools or limiting a normal multi-step response.
+// LLMParameters contains request controls whose defaults favor concise coding responses without limiting tools.
 type LLMParameters struct {
 	Temperature         float64
 	TopP                float64
@@ -102,7 +100,7 @@ type Usage struct {
 	Cost                *float64             `json:"cost,omitempty"`
 }
 
-// ---- Streaming (SSE) types ----
+// The remaining types model streaming SSE payloads.
 
 type ChatCompletionChunk struct {
 	Choices []ChunkChoice `json:"choices"`

@@ -8,9 +8,7 @@ import (
 
 var errInputInterrupt = errors.New("input interrupted")
 
-// lineEditor is the interactive input boundary. Platform implementations return
-// nil when the supplied streams are not terminals, preserving scanner input for
-// pipes, files, and tests.
+// lineEditor is the interactive input boundary; platform constructors return nil for non-terminal streams.
 type lineEditor interface {
 	ReadLine(context.Context, string) (string, error)
 }

@@ -5,8 +5,7 @@ import (
 	"strings"
 )
 
-// resolveLLMParameters validates CLI values and preserves an absent seed so it
-// is not sent as an accidental zero to servers that support deterministic runs.
+// resolveLLMParameters validates CLI values and omits an unset seed instead of sending zero.
 func resolveLLMParameters(parameters LLMParameters, seed int64, seedSet bool) (LLMParameters, error) {
 	if parameters.Temperature < 0 || parameters.Temperature > 2 {
 		return LLMParameters{}, fmt.Errorf("-temperature must be between 0 and 2")

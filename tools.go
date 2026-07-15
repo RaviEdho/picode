@@ -51,8 +51,7 @@ func (e *ToolExecutor) unregisterActive(id uint64) {
 	delete(e.active, id)
 }
 
-// ExecuteBatch runs read-only tools concurrently and mutating tools in order.
-// Results always retain the model-provided tool-call order.
+// ExecuteBatch runs read-only tools concurrently and mutations sequentially while retaining result order.
 func (e *ToolExecutor) ExecuteBatch(ctx context.Context, calls []ToolCall) []ToolResult {
 	results := make([]ToolResult, len(calls))
 	var group sync.WaitGroup

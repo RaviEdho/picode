@@ -126,8 +126,7 @@ func run() error {
 		Enabled: state.System.Enabled,
 	}
 
-	// A resumed session uses its saved model unless this invocation explicitly
-	// supplies a model override. Endpoints and credentials are never persisted.
+	// Resume with the saved model unless explicitly overridden; endpoints and credentials are never persisted.
 	selectedModel := state.Model
 	if !resuming || explicit["model"] {
 		selectedModel = *model
@@ -138,13 +137,11 @@ func run() error {
 		}
 	}
 
-	// PlainUI is the only frontend until a full TUI is added.
 	var ui Frontend = NewPlainUI(os.Stdin, os.Stdout, os.Stderr)
 	for _, warning := range startupWarnings {
 		ui.Warning(warning)
 	}
 
-	// Logging is optional and remains a no-op when logger is nil.
 	var logger *RequestLogger
 	if *logSession {
 		logger, err = NewRequestLogger()
@@ -182,8 +179,7 @@ func run() error {
 	return err
 }
 
-// printSessions displays enough context to identify an older conversation
-// without loading it into a new chat process.
+// printSessions displays enough context to identify an older conversation without starting a chat.
 func printSessions(store *FileSessionStore, workingDirectory string, out io.Writer) error {
 	sessions, err := store.List(workingDirectory)
 	if err != nil {
@@ -254,8 +250,7 @@ func (r *resumeFlag) Set(value string) error {
 
 func (r *resumeFlag) IsBoolFlag() bool { return true }
 
-// normalizeResumeArgs lets the standard flag package accept the friendlier
-// separated form, -resume <session-id>, in addition to -resume=<session-id>.
+// normalizeResumeArgs lets flag accept -resume <session-id> as well as -resume=<session-id>.
 func normalizeResumeArgs(args []string) []string {
 	normalized := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {

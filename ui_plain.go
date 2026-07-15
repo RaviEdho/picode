@@ -74,8 +74,7 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 		}
 	}()
 
-	// Terminal input uses the platform line editor. Pipes, files, and injected
-	// test streams retain the scanner path.
+	// Use platform line editing for terminals and scanner input for pipes, files, and tests.
 	editor := newPlatformLineEditor(ui.in, ui.out)
 	var scannedInput <-chan inputResult
 	if editor == nil {
@@ -114,8 +113,7 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 		}
 		select {
 		case <-ctx.Done():
-			// The editor owns temporary terminal settings. Wait for its short
-			// context poll so it restores them before the process can exit.
+			// Wait for the editor's context poll so it restores temporary terminal settings before exit.
 			if editor != nil {
 				<-input
 			}
@@ -264,8 +262,7 @@ func (ui *PlainUI) spinWithStatus(initial string) (update func(string), stop fun
 	return update, stop
 }
 
-// printHistory restores the saved transcript using the same labels and
-// truncation as live output. It intentionally adds no resume-specific marker.
+// printHistory restores a saved transcript with live-output labels and truncation but no resume marker.
 func (ui *PlainUI) printHistory(messages []Message) {
 	for _, message := range messages {
 		switch message.Role {
