@@ -162,7 +162,7 @@ func (ui *PlainUI) Emit(event UIEvent) {
 	case AssistantDeltaEvent:
 		ui.stopSpinner()
 		if !ui.textOpen {
-			fmt.Fprintf(ui.out, "%smodel>%s ", colorGreen, colorReset)
+			fmt.Fprintf(ui.out, "%spicode>%s ", colorGreen, colorReset)
 			ui.textOpen = true
 		}
 		fmt.Fprint(ui.out, event.Text)
