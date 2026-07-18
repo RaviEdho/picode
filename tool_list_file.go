@@ -26,29 +26,29 @@ func listFileTool() Tool {
 		Type: "function",
 		Function: ToolFunction{
 			Name: "list_file",
-			Description: "List files and directories under a relative directory in the " +
-				"current working directory. Output is sorted, bounded, and uses D/F/S " +
-				"markers for directories, files, and symlinks. The default depth is 2. " +
-				"The .git directory is skipped; use run_command for detailed metadata or " +
-				"custom filtering.",
+			Description: "List a bounded directory tree under a relative path in the current " +
+				"working directory. Start with the smallest relevant path, depth 1, and a " +
+				"small max_entries; expand only when needed. Use this for repository structure, " +
+				"not file contents. Output is sorted and uses D/F/S markers; .git is skipped. " +
+				"Use run_command for metadata or custom filtering.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Relative directory to list; defaults to the current working directory.",
+						"description": "Smallest relevant relative directory; defaults to the current working directory.",
 					},
 					"depth": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
 						"maximum":     listFileMaxDepth,
-						"description": "Maximum descendant depth; defaults to 2.",
+						"description": "Maximum descendant depth; start at 1 and increase only if needed; defaults to 2.",
 					},
 					"max_entries": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
 						"maximum":     listFileMaxEntries,
-						"description": "Maximum entries to return; defaults to 200.",
+						"description": "Maximum entries to return; start small and increase only if needed; defaults to 200.",
 					},
 				},
 			},

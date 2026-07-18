@@ -26,9 +26,10 @@ func readFileTool() Tool {
 		Type: "function",
 		Function: ToolFunction{
 			Name: "read_file",
-			Description: "Read a UTF-8 text file in the current working directory and " +
-				"return numbered lines. Paths must be relative. Output is limited to " +
-				"200 lines and 32 KiB; use start_line and end_line for focused reads. " +
+			Description: "Read a focused range from a UTF-8 text file in the current working " +
+				"directory and return numbered lines. When the location is unknown, use search " +
+				"first; request only the smallest relevant range and avoid rereading unchanged " +
+				"content. Paths must be relative. Output is limited to 200 lines and 32 KiB. " +
 				"Use run_command for binary files or commands.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -40,12 +41,12 @@ func readFileTool() Tool {
 					"start_line": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
-						"description": "First 1-based line to return; defaults to 1.",
+						"description": "First 1-based line to return; use the location found by search when possible; defaults to 1.",
 					},
 					"end_line": map[string]any{
 						"type":        "integer",
 						"minimum":     1,
-						"description": "Last 1-based line to return; defaults to 200 lines after start_line.",
+						"description": "Last 1-based line to return; request the smallest useful range; defaults to 200 lines after start_line.",
 					},
 				},
 				"required": []string{"path"},

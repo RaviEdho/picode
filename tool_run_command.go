@@ -29,13 +29,14 @@ func runCommandTool() Tool {
 		Type: "function",
 		Function: ToolFunction{
 			Name: "run_command",
-			Description: "Execute a shell command on the user's local machine and return " +
-				"its combined stdout/stderr. " + shellSyntaxNote + " " +
-				"Use it to inspect the filesystem, run builds/tests, query git, read files, " +
-				"or apply changes. Use read_file for routine text-file inspection. Output is capped at 1 MiB, with the beginning and end retained. There is a hard 30-second timeout per call; for long tasks " +
-				"redirect output and poll it in a later call. " +
-				"Output is trimmed of trailing whitespace. Prefer read-only investigative " +
-				"commands before making changes, and verify changes afterwards.",
+			Description: "Execute a focused shell command on the user's local machine and return " +
+				"its combined stdout/stderr. " + shellSyntaxNote + " Use this for builds, tests, " +
+				"git, metadata, binary-oriented operations, or when a dedicated tool is unsuitable. " +
+				"Do not use it for routine text inspection; prefer list_file, search, or read_file. " +
+				"Keep output focused, prefer read-only investigation before changes, and verify " +
+				"afterwards. Output is capped at 1 MiB with the beginning and end retained; the " +
+				"timeout is 30 seconds. For long tasks, redirect output and poll later. " +
+				"Output is trimmed of trailing whitespace.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

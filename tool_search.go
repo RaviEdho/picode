@@ -36,8 +36,10 @@ func searchTool() Tool {
 		Type: "function",
 		Function: ToolFunction{
 			Name: "search",
-			Description: "Search bounded UTF-8 text files under a relative path. Literal and " +
-				"case-sensitive matching are default; regex and case-insensitive matching are opt-in. " +
+			Description: "Search bounded UTF-8 text files under a relative path. Prefer this before " +
+				"read_file when a symbol, error, or text location is unknown. Restrict path to the " +
+				"smallest relevant scope, use literal matching by default, keep max_results small, " +
+				"and add context only when needed. Regex and case-insensitive matching are opt-in. " +
 				"Skips .git and common dependency/generated directories.",
 			Parameters: map[string]any{
 				"type": "object",
@@ -48,7 +50,7 @@ func searchTool() Tool {
 					},
 					"path": map[string]any{
 						"type":        "string",
-						"description": "Relative file or directory; default .",
+						"description": "Smallest relevant relative file or directory; defaults to .",
 					},
 					"case_sensitive": map[string]any{
 						"type":        "boolean",
@@ -65,14 +67,14 @@ func searchTool() Tool {
 						"minimum":     1,
 						"maximum":     searchMaxResults,
 						"default":     searchDefaultMaxResults,
-						"description": "Maximum matching lines; default 100",
+						"description": "Maximum matching lines; keep small and increase only if results are incomplete; default 100",
 					},
 					"context_lines": map[string]any{
 						"type":        "integer",
 						"minimum":     0,
 						"maximum":     searchMaxContext,
 						"default":     searchDefaultContext,
-						"description": "Surrounding context lines; default 0",
+						"description": "Surrounding context lines; start at 0 and add only when needed; default 0",
 					},
 				},
 				"required": []string{"query"},

@@ -49,11 +49,13 @@ func applyPatchTool() Tool {
 		Type: "function",
 		Function: ToolFunction{
 			Name: "apply_patch",
-			Description: "Apply a structured patch to files in the current working directory. " +
-				"Use *** Begin Patch and *** End Patch with one or more *** Add File, " +
+			Description: "Apply the smallest complete structured patch needed to files in the " +
+				"current working directory. Inspect relevant code first, preserve unrelated " +
+				"changes, combine related edits when practical, and do not rewrite whole files " +
+				"unnecessarily. Use *** Begin Patch and *** End Patch with one or more *** Add File, " +
 				"*** Update File, or *** Delete File sections. Update sections contain @@ hunks " +
-				"whose lines begin with a space (context), + (add), or - (remove). " +
-				"All paths must be relative. The patch is validated before files are changed.",
+				"whose lines begin with a space (context), + (add), or - (remove). All paths must " +
+				"be relative. The patch is validated before files are changed.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
