@@ -109,7 +109,7 @@ func (s *Session) RunTurn(ctx context.Context, input string, events EventSink) (
 		}
 
 		// Execute independent reads concurrently while retaining model-provided result order.
-		results := s.executor.ExecuteBatch(ctx, assistant.ToolCalls)
+		results := s.executor.ExecuteBatch(ctx, assistant.ToolCalls, events)
 		for i, tc := range assistant.ToolCalls {
 			result := results[i]
 			s.logger.LogEvent(fmt.Sprintf("tool %s: input=%q status=%s output=(%d bytes)",

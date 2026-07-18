@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -79,7 +80,12 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 	if err := setLinuxTermios(fd, &raw); err != nil {
 		return "", fmt.Errorf("enable terminal line editing: %w", err)
 	}
+	// Ask terminals that support the kitty keyboard protocol to distinguish
+	// Shift+Enter from Enter. Older terminals ignore this private sequence and
+	// continue to use their normal key encoding.
+	fmt.Fprint(e.out, "\033[>1u")
 	defer func() {
+		fmt.Fprint(e.out, "\033[<u")
 		if restoreErr := setLinuxTermios(fd, &original); err == nil && restoreErr != nil {
 			err = fmt.Errorf("restore terminal settings: %w", restoreErr)
 		}
@@ -98,13 +104,31 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 			return "", readErr
 		}
 		switch value {
-		case '\r', '\n':
+		case '\r':
+			// Terminals commonly encode Enter as CR.  Shift+Enter is
+			// handled by the terminal's modified-key escape sequence below.
 			e.finishLine("")
 			line = current.String()
 			if line != "" && (len(e.history) == 0 || e.history[len(e.history)-1] != line) {
 				e.history = append(e.history, line)
 			}
 			return line, nil
+		case '\n':
+			// A bare LF is a normal submit key in raw mode.
+			e.finishLine("")
+			line = current.String()
+			if line != "" && (len(e.history) == 0 || e.history[len(e.history)-1] != line) {
+				e.history = append(e.history, line)
+			}
+			return line, nil
+		case '\t': // Tab completes a file or directory path.
+			start, replacement, matches := completePath(&current)
+			if replacement != "" {
+				current.replace(start, current.cursor, replacement)
+				e.redraw(prompt, &current)
+			} else if len(matches) > 1 {
+				e.showCompletions(prompt, &current, matches)
+			}
 		case 3: // Ctrl-C
 			e.finishLine("^C")
 			return "", errInputInterrupt
@@ -137,6 +161,8 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 				return "", keyErr
 			}
 			switch key {
+			case "shift-enter":
+				current.insert('\n')
 			case "left":
 				if current.cursor > 0 {
 					current.cursor--
@@ -184,6 +210,14 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 	}
 }
 
+func (e *linuxLineEditor) showCompletions(prompt string, line *editableLine, matches []string) {
+	e.finishLine("")
+	for _, match := range matches {
+		fmt.Fprintf(e.out, "  %s\n", match)
+	}
+	e.redraw(prompt, line)
+}
+
 func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	columns := linuxTerminalColumns(e.outFD)
 	if columns <= 0 {
@@ -195,13 +229,12 @@ func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	if e.renderCursorRow > 0 {
 		fmt.Fprintf(e.out, "\033[%dA", e.renderCursorRow)
 	}
-	fmt.Fprintf(e.out, "\033[J%s%s", prompt, line.String())
+	display := strings.ReplaceAll(line.String(), "\n", "\n  ")
+	fmt.Fprintf(e.out, "\033[J%s%s", prompt, display)
 
 	promptWidth := ansiDisplayWidth(prompt)
-	totalWidth := promptWidth + runeDisplayWidth(line.text)
-	cursorWidth := promptWidth + runeDisplayWidth(line.text[:line.cursor])
-	endRow := occupiedRow(totalWidth, columns)
-	cursorRow, cursorColumn := cursorPosition(cursorWidth, totalWidth, columns)
+	endRow := multilineEndRow(promptWidth, line.text, 2, columns)
+	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 2, columns)
 
 	// Position from the rendered end because leftward cursor movement does not cross rows consistently.
 	fmt.Fprint(e.out, "\r")
@@ -237,45 +270,12 @@ func linuxTerminalColumns(fd uintptr) int {
 	return int(size.columns)
 }
 
-func occupiedRow(width, columns int) int {
-	if width <= 0 {
-		return 0
-	}
-	return (width - 1) / columns
-}
-
 func cursorPosition(cursorWidth, totalWidth, columns int) (row, column int) {
 	// At the exact right edge, terminals retain the cursor in the final column until another character wraps.
 	if cursorWidth == totalWidth && cursorWidth > 0 && cursorWidth%columns == 0 {
 		return (cursorWidth - 1) / columns, columns - 1
 	}
 	return cursorWidth / columns, cursorWidth % columns
-}
-
-func ansiDisplayWidth(value string) int {
-	width := 0
-	state := byte(0)
-	for _, r := range value {
-		switch state {
-		case 1: // Escape introducer.
-			if r == '[' {
-				state = 2
-			} else {
-				state = 0
-			}
-		case 2: // CSI parameters, ending with a final byte.
-			if r >= 0x40 && r <= 0x7e {
-				state = 0
-			}
-		default:
-			if r == 0x1b {
-				state = 1
-			} else {
-				width++
-			}
-		}
-	}
-	return width
 }
 
 func runeDisplayWidth(value []rune) int {
@@ -313,7 +313,7 @@ func (e *linuxLineEditor) readEscape(ctx context.Context) (string, error) {
 			return "", err
 		}
 		sequence = append(sequence, b)
-		if (b >= 'A' && b <= 'Z') || b == '~' {
+		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '~' {
 			break
 		}
 	}
@@ -332,6 +332,8 @@ func (e *linuxLineEditor) readEscape(ctx context.Context) (string, error) {
 		return "end", nil
 	case "3~":
 		return "delete", nil
+	case "27;2;13~", "13;2u", "13;2;u":
+		return "shift-enter", nil
 	default:
 		return "", nil
 	}

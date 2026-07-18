@@ -36,7 +36,7 @@ func defaultLLMParameters() LLMParameters {
 	return LLMParameters{
 		Temperature:         0.2,
 		TopP:                1,
-		MaxCompletionTokens: 16384,
+		MaxCompletionTokens: 65536,
 		ServiceTier:         "flex",
 		ReasoningEffort:     "high",
 		Verbosity:           "low",

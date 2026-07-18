@@ -32,8 +32,8 @@ func resolveLLMParameters(parameters LLMParameters, seed int64, seedSet bool) (L
 		parameters.ServiceTier = ""
 	}
 	parameters.ReasoningEffort = strings.ToLower(strings.TrimSpace(parameters.ReasoningEffort))
-	if !oneOf(parameters.ReasoningEffort, "", "low", "medium", "high") {
-		return LLMParameters{}, fmt.Errorf("-reasoning-effort must be low, medium, or high")
+	if !oneOf(parameters.ReasoningEffort, "", "low", "medium", "high", "xhigh", "max") {
+		return LLMParameters{}, fmt.Errorf("-reasoning-effort must be low, medium, high, xhigh or max")
 	}
 	parameters.Verbosity = strings.ToLower(strings.TrimSpace(parameters.Verbosity))
 	if !oneOf(parameters.Verbosity, "", "low", "medium", "high") {

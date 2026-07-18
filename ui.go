@@ -59,6 +59,15 @@ type ToolResultEvent struct {
 	Status ToolStatus
 }
 
+// ToolProgressEvent reports the lifetime of a tool invocation.  A tool can
+// start and finish independently of the other tools in the same batch.
+type ToolProgressEvent struct {
+	Index  int
+	Name   string
+	Done   bool
+	Status ToolStatus
+}
+
 // StreamFinishedEvent closes the active streamed response.
 type StreamFinishedEvent struct{}
 
@@ -69,5 +78,6 @@ func (StatusEvent) isUIEvent()         {}
 func (AssistantDeltaEvent) isUIEvent() {}
 func (ToolCallUpdateEvent) isUIEvent() {}
 func (ToolResultEvent) isUIEvent()     {}
+func (ToolProgressEvent) isUIEvent()   {}
 func (StreamFinishedEvent) isUIEvent() {}
 func (EmptyResponseEvent) isUIEvent()  {}

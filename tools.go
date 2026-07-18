@@ -52,19 +52,35 @@ func (e *ToolExecutor) unregisterActive(id uint64) {
 }
 
 // ExecuteBatch runs read-only tools concurrently and mutations sequentially while retaining result order.
-func (e *ToolExecutor) ExecuteBatch(ctx context.Context, calls []ToolCall) []ToolResult {
+func (e *ToolExecutor) ExecuteBatch(ctx context.Context, calls []ToolCall, eventSinks ...EventSink) []ToolResult {
 	results := make([]ToolResult, len(calls))
+	var events EventSink
+	if len(eventSinks) > 0 {
+		events = eventSinks[0]
+	}
 	var group sync.WaitGroup
 	for i, call := range calls {
 		if toolMutatesWorkspace(call.Function.Name) {
 			group.Wait()
+			if events != nil {
+				events.Emit(ToolProgressEvent{Index: i, Name: call.Function.Name})
+			}
 			results[i] = e.Execute(ctx, call)
+			if events != nil {
+				events.Emit(ToolProgressEvent{Index: i, Name: call.Function.Name, Done: true, Status: results[i].Status})
+			}
 			continue
+		}
+		if events != nil {
+			events.Emit(ToolProgressEvent{Index: i, Name: call.Function.Name})
 		}
 		group.Add(1)
 		go func(index int, tc ToolCall) {
 			defer group.Done()
 			results[index] = e.Execute(ctx, tc)
+			if events != nil {
+				events.Emit(ToolProgressEvent{Index: index, Name: tc.Function.Name, Done: true, Status: results[index].Status})
+			}
 		}(i, call)
 	}
 	group.Wait()

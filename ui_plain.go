@@ -16,13 +16,23 @@ import (
 
 // ANSI styles used by the plain terminal renderer.
 const (
-	colorReset  = "\033[0m"
-	colorCyan   = "\033[1;36m"
-	colorGreen  = "\033[1;32m"
-	colorYellow = "\033[1;33m"
-	colorFaded  = "\033[2;37m"
+	colorReset  = ansiReset
+	colorCyan   = ansiCyan
+	colorGreen  = ansiGreen
+	colorYellow = ansiYellow
+	colorFaded  = ansiDim + "\033[38;5;245m"
 	clearEOL    = "\033[K"
 )
+
+// statusGradient is the subtle trail of the highlight that sweeps across the
+// response status text.
+var statusGradient = []string{
+	ansiDim + "\033[38;5;109m",
+	ansiDim + "\033[38;5;110m",
+	ansiDim + "\033[38;5;117m",
+	ansiDim + "\033[38;5;110m",
+	ansiDim + "\033[38;5;109m",
+}
 
 // PlainUI implements the current line-oriented terminal interface.
 type PlainUI struct {
@@ -30,13 +40,15 @@ type PlainUI struct {
 	out io.Writer
 	err io.Writer
 
-	// mu serializes event rendering with spinner output.
+	// mu serializes event rendering with status animation output.
 	mu sync.Mutex
 
-	spinnerUpdate func(string)
-	spinnerStop   func()
+	statusUpdate  func(string)
+	statusStop    func()
 	textOpen      bool
+	markdownLive  streamingMarkdown
 	toolOpen      bool
+	activeTools   int
 	printedTools  map[int]bool
 	printedCmdLen map[int]int
 }
@@ -153,24 +165,25 @@ func (ui *PlainUI) Emit(event UIEvent) {
 	// Each event updates only its related renderer state.
 	switch event := event.(type) {
 	case StatusEvent:
-		if ui.spinnerStop == nil {
+		if ui.statusStop == nil {
 			ui.resetResponseState()
-			ui.spinnerUpdate, ui.spinnerStop = ui.spinWithStatus(string(event.Phase))
+			ui.statusUpdate, ui.statusStop = ui.animateStatus(string(event.Phase))
 		} else {
-			ui.spinnerUpdate(string(event.Phase))
+			ui.statusUpdate(string(event.Phase))
 		}
 	case AssistantDeltaEvent:
-		ui.stopSpinner()
+		ui.stopStatus()
 		if !ui.textOpen {
 			fmt.Fprintf(ui.out, "%spicode>%s ", colorGreen, colorReset)
 			ui.textOpen = true
 		}
-		fmt.Fprint(ui.out, event.Text)
+		ui.markdownLive.write(ui.out, event.Text, false)
 	case ToolCallUpdateEvent:
-		ui.stopSpinner()
+		ui.stopStatus()
 		if event.Name == "" {
 			return
 		}
+		ui.markdownLive.write(ui.out, "", true)
 		if !ui.printedTools[event.Index] {
 			if ui.textOpen || ui.toolOpen {
 				fmt.Fprintln(ui.out)
@@ -185,7 +198,8 @@ func (ui *PlainUI) Emit(event UIEvent) {
 			ui.printedCmdLen[event.Index] = len(event.Input)
 		}
 	case StreamFinishedEvent:
-		ui.stopSpinner()
+		ui.stopStatus()
+		ui.markdownLive.write(ui.out, "", true)
 		if ui.textOpen {
 			fmt.Fprintln(ui.out)
 		}
@@ -194,6 +208,7 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		}
 		ui.textOpen = false
 		ui.toolOpen = false
+		ui.markdownLive.reset()
 	case ToolResultEvent:
 		if event.Status == ToolCancelled {
 			fmt.Fprintf(ui.out, "%s^C cancelled %s%s\n", colorYellow, event.Name, colorReset)
@@ -201,6 +216,24 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
 		printTruncated(ui.out, event.Output, 5, colorFaded)
 		fmt.Fprintln(ui.out)
+	case ToolProgressEvent:
+		if event.Done {
+			if ui.activeTools > 0 {
+				ui.activeTools--
+			}
+			if ui.activeTools == 0 {
+				ui.stopStatus()
+			} else if ui.statusUpdate != nil {
+				ui.statusUpdate(fmt.Sprintf("running %d tools", ui.activeTools))
+			}
+		} else {
+			ui.activeTools++
+			if ui.statusStop == nil {
+				ui.statusUpdate, ui.statusStop = ui.animateStatus(fmt.Sprintf("running %d tools", ui.activeTools))
+			} else if ui.statusUpdate != nil {
+				ui.statusUpdate(fmt.Sprintf("running %d tools", ui.activeTools))
+			}
+		}
 	case EmptyResponseEvent:
 		fmt.Fprintln(ui.out, "(empty response)")
 	}
@@ -214,52 +247,76 @@ func (ui *PlainUI) resetResponseState() {
 	ui.printedCmdLen = make(map[int]int)
 }
 
-// stopSpinner is safe to call after the spinner has already stopped.
-func (ui *PlainUI) stopSpinner() {
-	if ui.spinnerStop != nil {
-		ui.spinnerStop()
-		ui.spinnerUpdate = nil
-		ui.spinnerStop = nil
+// stopStatus is safe to call after the status animation has already stopped.
+func (ui *PlainUI) stopStatus() {
+	if ui.statusStop != nil {
+		ui.statusStop()
+		ui.statusUpdate = nil
+		ui.statusStop = nil
 	}
 }
 
-// spinWithStatus runs a spinner until its stop function is called.
-func (ui *PlainUI) spinWithStatus(initial string) (update func(string), stop func()) {
+// animateStatus sweeps the response status until its stop function is called.
+func (ui *PlainUI) animateStatus(initial string) (update func(string), stop func()) {
 	done := make(chan struct{})
 	var once sync.Once
 	var statusMu sync.Mutex
 	status := initial
+	phase := 0
 	var wg sync.WaitGroup
 	wg.Add(1)
-	fmt.Fprintf(ui.out, "\r%smodel>%s %s%s%s |%s", colorGreen, colorReset, colorFaded, status, colorReset, clearEOL)
+	writeStatus(ui.out, status, phase)
 	go func() {
 		defer wg.Done()
-		frames := []string{"|", "/", "-", "\\"}
-		for i := 1; ; i++ {
+		ticker := time.NewTicker(60 * time.Millisecond)
+		defer ticker.Stop()
+		for {
 			select {
 			case <-done:
 				return
-			case <-time.After(100 * time.Millisecond):
+			case <-ticker.C:
 			}
 			statusMu.Lock()
-			fmt.Fprintf(ui.out, "\r%smodel>%s %s%s %s%s%s", colorGreen, colorReset, colorFaded, status, frames[i%len(frames)], colorReset, clearEOL)
+			phase++
+			writeStatus(ui.out, status, phase)
 			statusMu.Unlock()
 		}
 	}()
 	update = func(value string) {
 		statusMu.Lock()
 		status = value
-		fmt.Fprintf(ui.out, "\r%smodel>%s %s%s%s |%s", colorGreen, colorReset, colorFaded, value, colorReset, clearEOL)
+		writeStatus(ui.out, value, phase)
 		statusMu.Unlock()
 	}
 	stop = func() {
 		once.Do(func() {
 			close(done)
 			wg.Wait()
-			fmt.Fprint(ui.out, "\r"+strings.Repeat(" ", 60)+"\r")
+			fmt.Fprint(ui.out, "\r", clearEOL)
 		})
 	}
 	return update, stop
+}
+
+// writeStatus sweeps a subtle gradient over the response status text.
+func writeStatus(out io.Writer, status string, phase int) {
+	runes := []rune(status)
+	fmt.Fprintf(out, "\r%spicode>%s ", colorGreen, colorReset)
+	if status == string(StatusWaiting) || status == string(StatusThinking) {
+		cycle := len(runes) + len(statusGradient)
+		position := phase % cycle
+		for i, glyph := range runes {
+			color := colorFaded
+			trailIndex := position - i
+			if trailIndex >= 0 && trailIndex < len(statusGradient) {
+				color = statusGradient[trailIndex]
+			}
+			fmt.Fprintf(out, "%s%c%s", color, glyph, colorReset)
+		}
+	} else {
+		fmt.Fprint(out, colorFaded, status, colorReset)
+	}
+	fmt.Fprint(out, clearEOL)
 }
 
 // printHistory restores a saved transcript with live-output labels and truncation but no resume marker.
@@ -270,7 +327,8 @@ func (ui *PlainUI) printHistory(messages []Message) {
 			fmt.Fprintf(ui.out, "%syou>%s %s\n", colorCyan, colorReset, message.Content)
 		case "assistant":
 			if message.Content != "" {
-				fmt.Fprintf(ui.out, "%smodel>%s %s\n", colorGreen, colorReset, message.Content)
+				fmt.Fprintf(ui.out, "%spicode>%s ", colorGreen, colorReset)
+				renderMarkdown(ui.out, message.Content)
 			}
 			for _, call := range message.ToolCalls {
 				fmt.Fprintf(ui.out, "%s%s>%s %s\n", colorYellow, call.Function.Name, colorReset,
@@ -286,10 +344,14 @@ func (ui *PlainUI) printHistory(messages []Message) {
 
 // printSummary renders the final session token counts.
 func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string, resumable bool) {
-	fmt.Fprintf(ui.out, "\nsession ended - %d tokens total, %d sent (+%d cached), %d received",
-		usage.Total(), usage.Prompt-usage.Cached, usage.Cached, usage.Completion)
+	fmt.Fprintf(ui.out, "\n%s session ended%s - %s%d%s tokens total, %s%d%s sent (+%s%d%s cached), %s%d%s received",
+		ansiBlue, colorReset,
+		ansiYellow, usage.Total(), colorReset,
+		ansiCyan, usage.Prompt-usage.Cached, colorReset,
+		colorFaded, usage.Cached, colorReset,
+		ansiGreen, usage.Completion, colorReset)
 	if usage.Cost != nil {
-		fmt.Fprintf(ui.out, ", $%.6f cost", *usage.Cost)
+		fmt.Fprintf(ui.out, ", %s$%.6f%s cost", ansiMagenta, *usage.Cost, colorReset)
 	}
 	fmt.Fprintln(ui.out)
 	if resumable {
