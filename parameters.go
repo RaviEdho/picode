@@ -24,12 +24,8 @@ func resolveLLMParameters(parameters LLMParameters, seed int64, seedSet bool) (L
 	}
 	parameters.ServiceTier = strings.TrimSpace(parameters.ServiceTier)
 	parameters.ServiceTier = strings.ToLower(parameters.ServiceTier)
-	if !oneOf(parameters.ServiceTier, "", "none", "auto", "default", "flex", "priority") {
-		return LLMParameters{}, fmt.Errorf("-service-tier must be none, auto, default, flex, or priority")
-	}
-	// "none" is a CLI sentinel for omitting service_tier from the request.
-	if parameters.ServiceTier == "none" {
-		parameters.ServiceTier = ""
+	if !oneOf(parameters.ServiceTier, "", "auto", "default", "flex", "priority") {
+		return LLMParameters{}, fmt.Errorf("-service-tier must be auto, default, flex, or priority")
 	}
 	parameters.ReasoningEffort = strings.ToLower(strings.TrimSpace(parameters.ReasoningEffort))
 	if !oneOf(parameters.ReasoningEffort, "", "low", "medium", "high", "xhigh", "max") {
