@@ -121,7 +121,6 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 	}
 
 	var output strings.Builder
-	fmt.Fprintf(&output, "search %q in %q:\n", args.Query, filepath.ToSlash(args.Path))
 	matched := 0
 	walkErr := filepath.WalkDir(searchRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -166,10 +165,10 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 	})
 
 	if errors.Is(walkErr, errSearchResultLimit) {
-		output.WriteString(fmt.Sprintf("[result limit reached: %d; narrow the path or raise max_results]\n", args.MaxResults))
+		output.WriteString(fmt.Sprintf("[max_results=%d; narrow path or raise limit]\n", args.MaxResults))
 		walkErr = nil
 	} else if errors.Is(walkErr, errSearchOutputLimit) {
-		output.WriteString("[output truncated at 32 KiB; narrow the path or reduce context_lines]\n")
+		output.WriteString("[truncated; narrow path or reduce context]\n")
 		walkErr = nil
 	}
 	if walkErr != nil {
@@ -255,13 +254,18 @@ func appendSearchResults(output *strings.Builder, path string, lines []string, m
 		}
 		ranges = append(ranges, [2]int{start, end})
 	}
+	header := fmt.Sprintf("%s:\n", path)
+	if output.Len()+len(header) > searchMaxOutput {
+		return errSearchOutputLimit
+	}
+	output.WriteString(header)
 	for _, searchRange := range ranges {
 		for line := searchRange[0]; line <= searchRange[1]; line++ {
 			separator := "-"
 			if matchSet[line] {
 				separator = ":"
 			}
-			entry := fmt.Sprintf("%s:%d%s %s\n", path, line+1, separator, lines[line])
+			entry := fmt.Sprintf("%d%s %s\n", line+1, separator, lines[line])
 			if output.Len()+len(entry) > searchMaxOutput {
 				return errSearchOutputLimit
 			}

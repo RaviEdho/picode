@@ -91,7 +91,7 @@ func (e *ToolExecutor) executeApplyPatch(ctx context.Context, tc ToolCall) ToolR
 
 	var output strings.Builder
 	additions, deletions := 0, 0
-	output.WriteString("Patch applied successfully.")
+	output.WriteString("applied:")
 	for _, plan := range plans {
 		marker := byte('M')
 		if plan.kind == patchAdd {
@@ -109,7 +109,7 @@ func (e *ToolExecutor) executeApplyPatch(ctx context.Context, tc ToolCall) ToolR
 		}
 		fmt.Fprintf(&output, "\n%c %s", marker, filepath.ToSlash(plan.path))
 	}
-	fmt.Fprintf(&output, "\nDiff summary: %d additions, %d deletions across %d files.", additions, deletions, len(plans))
+	fmt.Fprintf(&output, "\ndiff +%d -%d (%d files)", additions, deletions, len(plans))
 	return ToolResult{Input: args.Patch, Output: output.String(), Status: ToolCompleted}
 }
 

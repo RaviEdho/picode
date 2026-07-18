@@ -131,11 +131,11 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 
 	var output strings.Builder
-	fmt.Fprintf(&output, "%s (depth %d):\n", filepath.ToSlash(args.Path), args.Depth)
+	fmt.Fprintf(&output, "%s [depth=%d]:\n", filepath.ToSlash(args.Path), args.Depth)
 	for _, item := range entries {
 		line := fmt.Sprintf("%c %s\n", item.kind, item.path)
 		if output.Len()+len(line) > listFileMaxOutput {
-			output.WriteString("[output truncated at 32 KiB; request a smaller scope]\n")
+			output.WriteString("[truncated; request a smaller scope]\n")
 			break
 		}
 		output.WriteString(line)
@@ -144,7 +144,7 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 		output.WriteString("(empty)\n")
 	}
 	if len(entries) >= args.MaxEntries {
-		output.WriteString(fmt.Sprintf("[entry limit reached: %d; request a smaller scope]\n", args.MaxEntries))
+		output.WriteString(fmt.Sprintf("[max_entries=%d; request a smaller scope]\n", args.MaxEntries))
 	}
 	return ToolResult{Input: args.Path, Output: output.String(), Status: ToolCompleted}
 }

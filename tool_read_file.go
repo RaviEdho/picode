@@ -124,7 +124,7 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 			break
 		}
 		if lineTruncated {
-			line += "... [line truncated]"
+			line += "…[line truncated]"
 		}
 		entry := fmt.Sprintf("%d| %s\n", lineNumber, line)
 		if output.Len()+len(entry) > readFileMaxOutput {
@@ -136,14 +136,14 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 	}
 
 	if returned == 0 {
-		output.WriteString("(no lines in requested range)\n")
+		output.WriteString("(none)\n")
 	}
-	header := fmt.Sprintf("%s (lines %d-%d):\n", filepath.ToSlash(args.Path), args.StartLine, args.StartLine+returned-1)
+	header := fmt.Sprintf("%s [%d-%d]:\n", filepath.ToSlash(args.Path), args.StartLine, args.StartLine+returned-1)
 	if returned == 0 {
-		header = fmt.Sprintf("%s (requested lines %d-%d):\n", filepath.ToSlash(args.Path), args.StartLine, args.EndLine)
+		header = fmt.Sprintf("%s [%d-%d requested]:\n", filepath.ToSlash(args.Path), args.StartLine, args.EndLine)
 	}
 	if truncatedOutput {
-		output.WriteString("[output truncated at 32 KiB; request a smaller range]\n")
+		output.WriteString("[truncated; request a smaller range]\n")
 	}
 	return ToolResult{Input: args.Path, Output: header + output.String(), Status: ToolCompleted}
 }
