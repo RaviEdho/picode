@@ -89,6 +89,52 @@ func (e *ToolExecutor) ExecuteBatch(ctx context.Context, calls []ToolCall, event
 
 func toolMutatesWorkspace(name string) bool { return name == "apply_patch" || name == "run_command" }
 
+// functionTool builds the common object schema shared by all function tools.
+func functionTool(name, description string, properties map[string]any, required ...string) Tool {
+	parameters := map[string]any{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(required) > 0 {
+		parameters["required"] = required
+	}
+	return Tool{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        name,
+			Description: description,
+			Parameters:  parameters,
+		},
+	}
+}
+
+func stringParameter(description string) map[string]any {
+	return map[string]any{"type": "string", "description": description}
+}
+
+func integerParameter(minimum, maximum int, description string, defaultValue ...int) map[string]any {
+	parameter := map[string]any{
+		"type":        "integer",
+		"minimum":     minimum,
+		"description": description,
+	}
+	if maximum > 0 {
+		parameter["maximum"] = maximum
+	}
+	if len(defaultValue) > 0 {
+		parameter["default"] = defaultValue[0]
+	}
+	return parameter
+}
+
+func booleanParameter(defaultValue bool, description string) map[string]any {
+	return map[string]any{
+		"type":        "boolean",
+		"default":     defaultValue,
+		"description": description,
+	}
+}
+
 // allTools returns every tool exposed to the model.
 func allTools() []Tool {
 	return []Tool{listFileTool(), readFileTool(), searchTool(), runCommandTool(), applyPatchTool()}

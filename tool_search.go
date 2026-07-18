@@ -32,55 +32,19 @@ var (
 
 // searchTool returns a bounded text search tool for focused repository inspection.
 func searchTool() Tool {
-	return Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "search",
-			Description: "Search bounded UTF-8 text files under a relative path. Prefer this before " +
-				"read_file when a symbol, error, or text location is unknown. Restrict path to the " +
-				"smallest relevant scope, use literal matching by default, keep max_results small, " +
-				"and add context only when needed. Regex and case-insensitive matching are opt-in. " +
-				"Skips .git and common dependency/generated directories.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "Text or regular expression",
-					},
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Smallest relevant relative file or directory; defaults to .",
-					},
-					"case_sensitive": map[string]any{
-						"type":        "boolean",
-						"default":     true,
-						"description": "Case-sensitive; default true",
-					},
-					"regex": map[string]any{
-						"type":        "boolean",
-						"default":     false,
-						"description": "Treat as regex; default false",
-					},
-					"max_results": map[string]any{
-						"type":        "integer",
-						"minimum":     1,
-						"maximum":     searchMaxResults,
-						"default":     searchDefaultMaxResults,
-						"description": "Maximum matching lines; keep small and increase only if results are incomplete; default 100",
-					},
-					"context_lines": map[string]any{
-						"type":        "integer",
-						"minimum":     0,
-						"maximum":     searchMaxContext,
-						"default":     searchDefaultContext,
-						"description": "Surrounding context lines; start at 0 and add only when needed; default 0",
-					},
-				},
-				"required": []string{"query"},
-			},
+	return functionTool(
+		"search",
+		"Bounded UTF-8 text search under a relative path. Use before read_file when a symbol, error, or location is unknown. Use the smallest scope, literal matching by default, small max_results, and context only as needed. Regex/case-insensitive matching are opt-in. Skips .git and common dependency/generated dirs.",
+		map[string]any{
+			"query":          stringParameter("Text or regex."),
+			"path":           stringParameter("Smallest relevant relative file/dir; default ."),
+			"case_sensitive": booleanParameter(true, "Case-sensitive; default true."),
+			"regex":          booleanParameter(false, "Treat as regex; default false."),
+			"max_results":    integerParameter(1, searchMaxResults, "Matching lines; keep small, increase only if incomplete; default 100.", searchDefaultMaxResults),
+			"context_lines":  integerParameter(0, searchMaxContext, "Context lines; start at 0, add only as needed; default 0.", searchDefaultContext),
 		},
-	}
+		"query",
+	)
 }
 
 // executeSearch validates arguments and performs a bounded workspace search.

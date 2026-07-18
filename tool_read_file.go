@@ -22,37 +22,16 @@ const (
 
 // readFileTool returns bounded, numbered text without the shell overhead of run_command.
 func readFileTool() Tool {
-	return Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "read_file",
-			Description: "Read a focused range from a UTF-8 text file in the current working " +
-				"directory and return numbered lines. When the location is unknown, use search " +
-				"first; request only the smallest relevant range and avoid rereading unchanged " +
-				"content. Paths must be relative. Output is limited to 200 lines and 32 KiB. " +
-				"Use run_command for binary files or commands.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Relative file path under the current working directory.",
-					},
-					"start_line": map[string]any{
-						"type":        "integer",
-						"minimum":     1,
-						"description": "First 1-based line to return; use the location found by search when possible; defaults to 1.",
-					},
-					"end_line": map[string]any{
-						"type":        "integer",
-						"minimum":     1,
-						"description": "Last 1-based line to return; request the smallest useful range; defaults to 200 lines after start_line.",
-					},
-				},
-				"required": []string{"path"},
-			},
+	return functionTool(
+		"read_file",
+		"Focused numbered lines from a UTF-8 text file in cwd. If location is unknown, search first; request the smallest relevant range; don't reread unchanged content. Paths are relative; output is capped at 200 lines/32 KiB. Use run_command for binaries/commands.",
+		map[string]any{
+			"path":       stringParameter("Relative file path under cwd."),
+			"start_line": integerParameter(1, 0, "First 1-based line; use search's location when possible; default 1."),
+			"end_line":   integerParameter(1, 0, "Last 1-based line; request the smallest useful range; default 200 lines after start_line."),
 		},
-	}
+		"path",
+	)
 }
 
 // executeReadFile validates arguments and reads a bounded section of a file.

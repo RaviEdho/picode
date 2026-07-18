@@ -45,29 +45,14 @@ type patchPlan struct {
 
 // applyPatchTool returns the OpenAI schema for safe, structured file edits.
 func applyPatchTool() Tool {
-	return Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "apply_patch",
-			Description: "Apply the smallest complete structured patch needed to files in the " +
-				"current working directory. Inspect relevant code first, preserve unrelated " +
-				"changes, combine related edits when practical, and do not rewrite whole files " +
-				"unnecessarily. Use *** Begin Patch and *** End Patch with one or more *** Add File, " +
-				"*** Update File, or *** Delete File sections. Update sections contain @@ hunks " +
-				"whose lines begin with a space (context), + (add), or - (remove). All paths must " +
-				"be relative. The patch is validated before files are changed.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"patch": map[string]any{
-						"type":        "string",
-						"description": "The complete structured patch to apply.",
-					},
-				},
-				"required": []string{"patch"},
-			},
+	return functionTool(
+		"apply_patch",
+		"Apply the smallest complete structured patch in cwd. Inspect first; preserve unrelated changes; combine related edits; don't rewrite unnecessarily. Use *** Begin Patch/End Patch with Add File, Update File, or Delete File sections. Update @@ hunks prefix lines with space (context), + (add), or - (remove). Paths are relative; validate before changing files.",
+		map[string]any{
+			"patch": stringParameter("Complete structured patch to apply."),
 		},
-	}
+		"patch",
+	)
 }
 
 // executeApplyPatch decodes, validates, and applies an apply_patch tool call.

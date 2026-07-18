@@ -25,30 +25,14 @@ var (
 // runCommandTool returns the OpenAI schema for the shell tool.
 func runCommandTool() Tool {
 	_, _, shellSyntaxNote := shellInfo()
-	return Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "run_command",
-			Description: "Execute a focused shell command on the user's local machine and return " +
-				"its combined stdout/stderr. " + shellSyntaxNote + " Use this for builds, tests, " +
-				"git, metadata, binary-oriented operations, or when a dedicated tool is unsuitable. " +
-				"Do not use it for routine text inspection; prefer list_file, search, or read_file. " +
-				"Keep output focused, prefer read-only investigation before changes, and verify " +
-				"afterwards. Output is capped at 1 MiB with the beginning and end retained; the " +
-				"timeout is 30 seconds. For long tasks, redirect output and poll later. " +
-				"Output is trimmed of trailing whitespace.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"command": map[string]any{
-						"type":        "string",
-						"description": shellCommandDescription(),
-					},
-				},
-				"required": []string{"command"},
-			},
+	return functionTool(
+		"run_command",
+		"Run a focused local shell command; return combined stdout/stderr. "+shellSyntaxNote+" Use for builds/tests, git, metadata, binaries, or when no dedicated tool fits. For text inspection prefer list_file/search/read_file. Keep output focused; investigate read-only first; verify after. Cap: 1 MiB with head/tail retained; timeout: 30s. For long tasks, redirect and poll. Trim trailing whitespace.",
+		map[string]any{
+			"command": stringParameter(shellCommandDescription()),
 		},
-	}
+		"command",
+	)
 }
 
 // executeRunCommand decodes and executes a run_command tool call.

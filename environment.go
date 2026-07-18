@@ -36,11 +36,10 @@ func shellInfo() (interpreter, flag, syntaxHint string) {
 // shellCommandDescription returns OS-appropriate guidance for the run_command argument.
 func shellCommandDescription() string {
 	if runtime.GOOS == "windows" {
-		return "The complete Windows PowerShell script to execute. Use pipelines, semicolons, " +
-			"and PowerShell quoting; do not add a powershell.exe wrapper."
+		return "Windows PowerShell script; use pipelines, semicolons, and PowerShell quoting; " +
+			"do not add a powershell.exe wrapper."
 	}
-	return "The full shell command to execute. Chain with && or ;, pipe with |, " +
-		"and use 2>&1 to capture stderr."
+	return "Shell command; chain with && or ;, pipe with |, and use 2>&1 for stderr."
 }
 
 // buildEnvironmentBlock captures a short Markdown runtime summary whose day-level date supports prompt caching.

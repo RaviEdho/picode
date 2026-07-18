@@ -22,38 +22,15 @@ const (
 
 // listFileTool returns a bounded directory listing without shell syntax or metadata noise.
 func listFileTool() Tool {
-	return Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "list_file",
-			Description: "List a bounded directory tree under a relative path in the current " +
-				"working directory. Start with the smallest relevant path, depth 1, and a " +
-				"small max_entries; expand only when needed. Use this for repository structure, " +
-				"not file contents. Output is sorted and uses D/F/S markers; .git is skipped. " +
-				"Use run_command for metadata or custom filtering.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "Smallest relevant relative directory; defaults to the current working directory.",
-					},
-					"depth": map[string]any{
-						"type":        "integer",
-						"minimum":     1,
-						"maximum":     listFileMaxDepth,
-						"description": "Maximum descendant depth; start at 1 and increase only if needed; defaults to 2.",
-					},
-					"max_entries": map[string]any{
-						"type":        "integer",
-						"minimum":     1,
-						"maximum":     listFileMaxEntries,
-						"description": "Maximum entries to return; start small and increase only if needed; defaults to 200.",
-					},
-				},
-			},
+	return functionTool(
+		"list_file",
+		"Bounded directory tree under a relative path in cwd. Start with the smallest relevant path, depth 1, and small max_entries; expand only as needed. For repository structure, not contents. Sorted D/F/S output; skips .git. Use run_command for metadata/filtering.",
+		map[string]any{
+			"path":        stringParameter("Smallest relevant relative directory; default ."),
+			"depth":       integerParameter(1, listFileMaxDepth, "Max descendant depth; start at 1; increase only as needed; default 2."),
+			"max_entries": integerParameter(1, listFileMaxEntries, "Max entries; start small; increase only as needed; default 200."),
 		},
-	}
+	)
 }
 
 // executeListFile validates arguments and returns a compact bounded listing.
