@@ -34,7 +34,7 @@ var (
 func searchTool() Tool {
 	return functionTool(
 		"search",
-		"Bounded UTF-8 text search under a relative path. Use before read_file when a symbol, error, or location is unknown. Use the smallest scope, literal matching by default, small max_results, and context only as needed. Regex/case-insensitive matching are opt-in. Skips .git and common dependency/generated dirs.",
+		"Bounded UTF-8 text search under a relative path. Use before read_file when a symbol, error, or location is unknown. Use the smallest scope, literal matching by default, small max_results, and context only as needed. Regex/case-insensitive matching are opt-in. Skips .git and common dependency/generated dirs. When path is omitted, the query also matches file and directory basenames, so a pathless query can locate a file by name.",
 		map[string]any{
 			"query":          stringParameter("Text or regex."),
 			"path":           stringParameter("Smallest relevant relative file/dir; default ."),
@@ -47,16 +47,19 @@ func searchTool() Tool {
 	)
 }
 
+// searchArgs holds the validated parameters for a search call.
+type searchArgs struct {
+	Query         string `json:"query"`
+	Path          string `json:"path"`
+	CaseSensitive *bool  `json:"case_sensitive"`
+	Regex         bool   `json:"regex"`
+	MaxResults    int    `json:"max_results"`
+	ContextLines  int    `json:"context_lines"`
+}
+
 // executeSearch validates arguments and performs a bounded workspace search.
 func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResult {
-	var args struct {
-		Query         string `json:"query"`
-		Path          string `json:"path"`
-		CaseSensitive *bool  `json:"case_sensitive"`
-		Regex         bool   `json:"regex"`
-		MaxResults    int    `json:"max_results"`
-		ContextLines  int    `json:"context_lines"`
-	}
+	var args searchArgs
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 		return ToolResult{Output: fmt.Sprintf("error: invalid arguments: %v", err), Status: ToolFailed}
 	}
@@ -64,7 +67,8 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		return failedSearchResult(args.Query, errors.New("query is required"))
 	}
 	args.Path = strings.TrimSpace(args.Path)
-	if args.Path == "" {
+	matchFilenames := args.Path == ""
+	if matchFilenames {
 		args.Path = "."
 	}
 	if args.MaxResults == 0 {
@@ -132,7 +136,27 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		if path != searchRoot && entry.IsDir() && isSkippedSearchDirectory(entry.Name()) {
 			return filepath.SkipDir
 		}
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+		isDir := entry.IsDir()
+		isSymlink := entry.Type()&os.ModeSymlink != 0
+
+		// When no path was supplied, the query also matches file and directory basenames,
+		// so the path to a matched named entry can be located without a content hit.
+		if matchFilenames && !isSymlink && path != searchRoot && matcher(filepath.Base(path)) {
+			if relative, err := filepath.Rel(root, path); err != nil {
+				return err
+			} else {
+				line := fmt.Sprintf("%c %s\n", searchEntryKind(entry), filepath.ToSlash(relative))
+				if output.Len()+len(line) > searchMaxOutput {
+					return errSearchOutputLimit
+				}
+				output.WriteString(line)
+				matched++
+				if matched >= args.MaxResults {
+					return errSearchResultLimit
+				}
+			}
+		}
+		if isDir || isSymlink {
 			return nil
 		}
 		info, err := entry.Info()
@@ -181,6 +205,16 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		output.WriteString("(no matches)\n")
 	}
 	return ToolResult{Input: args.Query, Output: output.String(), Status: ToolCompleted}
+}
+
+func searchEntryKind(entry os.DirEntry) byte {
+	if entry.IsDir() {
+		return 'D'
+	}
+	if entry.Type()&os.ModeSymlink != 0 {
+		return 'S'
+	}
+	return 'F'
 }
 
 func searchFile(ctx context.Context, path string, matcher func(string) bool, maxMatches int) ([]int, []string, error) {
