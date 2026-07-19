@@ -34,7 +34,7 @@ var (
 func searchTool() Tool {
 	return functionTool(
 		"search",
-		"Bounded UTF-8 text search under a relative path. Use before read_file when a symbol, error, or location is unknown. Use the smallest scope, literal matching by default, small max_results, and context only as needed. Regex/case-insensitive matching are opt-in. Skips .git and common dependency/generated dirs. When path is omitted, the query also matches file and directory basenames, so a pathless query can locate a file by name.",
+		"Bounded UTF-8 text search under a relative path. Default literal + case-sensitive; regex/case-insensitive opt-in. Smallest scope: smallest relevant path, small max_results, context only as needed. Skips .git and common dependency/generated dirs. Path omitted = query matches file/dir names too.",
 		map[string]any{
 			"query":          stringParameter("Text or regex."),
 			"path":           stringParameter("Smallest relevant relative file/dir; default ."),

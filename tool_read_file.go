@@ -24,7 +24,7 @@ const (
 func readFileTool() Tool {
 	return functionTool(
 		"read_file",
-		"Focused numbered lines from a UTF-8 text file in cwd. If location is unknown, search first; request the smallest relevant range; don't reread unchanged content. Paths are relative; output is capped at 200 lines/32 KiB. Use run_command for binaries/commands.",
+		"Focused numbered lines from a UTF-8 text file in cwd. Search first if location unknown; smallest relevant range; don't reread unchanged content. Paths relative; output capped at 200 lines/32 KiB. run_command for binaries/commands.",
 		map[string]any{
 			"path":       stringParameter("Relative file path under cwd."),
 			"start_line": integerParameter(1, 0, "First 1-based line; use search's location when possible; default 1."),

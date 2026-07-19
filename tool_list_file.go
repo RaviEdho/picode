@@ -24,7 +24,7 @@ const (
 func listFileTool() Tool {
 	return functionTool(
 		"list_file",
-		"Bounded directory tree under a relative path in cwd. Start with the smallest relevant path, depth 1, and small max_entries; expand only as needed. For repository structure, not contents. Sorted D/F/S output; skips .git. Use run_command for metadata/filtering.",
+		"Bounded directory tree under a relative path in cwd. Start minimal (small path, depth 1, few entries); expand only as needed. For repo structure, not contents. Sorted D/F/S output; skips .git. Metadata/filtering via run_command.",
 		map[string]any{
 			"path":        stringParameter("Smallest relevant relative directory; default ."),
 			"depth":       integerParameter(1, listFileMaxDepth, "Max descendant depth; start at 1; increase only as needed; default 2."),

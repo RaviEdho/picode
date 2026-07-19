@@ -27,7 +27,7 @@ func runCommandTool() Tool {
 	_, _, shellSyntaxNote := shellInfo()
 	return functionTool(
 		"run_command",
-		"Run a focused local shell command; return combined stdout/stderr. "+shellSyntaxNote+" Use for builds/tests, git, metadata, binaries, or when no dedicated tool fits. For text inspection prefer list_file/search/read_file. Keep output focused; investigate read-only first; verify after. Cap: 1 MiB with head/tail retained; timeout: 30s. For long tasks, redirect and poll. Trim trailing whitespace.",
+		"Run a focused local shell command; return combined stdout/stderr. "+shellSyntaxNote+" Use for builds/tests, git, metadata, binaries, or when no dedicated tool fits. Keep output focused; investigate read-only first; verify after. Cap: 1 MiB with head/tail retained; timeout: 30s. For long tasks, redirect and poll. Trim trailing whitespace.",
 		map[string]any{
 			"command": stringParameter(shellCommandDescription()),
 		},
