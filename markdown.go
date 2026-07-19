@@ -398,12 +398,8 @@ func isMarkdownTableDelimiter(line string) bool {
 	}
 	for _, cell := range cells {
 		cell = strings.TrimSpace(cell)
-		if strings.HasPrefix(cell, ":") {
-			cell = cell[1:]
-		}
-		if strings.HasSuffix(cell, ":") {
-			cell = cell[:len(cell)-1]
-		}
+		cell = strings.TrimPrefix(cell, ":")
+		cell = strings.TrimSuffix(cell, ":")
 		if len(cell) < 3 || strings.Trim(cell, "-") != "" {
 			return false
 		}
@@ -416,9 +412,7 @@ func splitMarkdownTableRow(line string) ([]string, bool) {
 	if !strings.Contains(trimmed, "|") {
 		return nil, false
 	}
-	if strings.HasPrefix(trimmed, "|") {
-		trimmed = trimmed[1:]
-	}
+	trimmed = strings.TrimPrefix(trimmed, "|")
 	if strings.HasSuffix(trimmed, "|") && !isEscapedMarkdownPipe(trimmed, len(trimmed)-1) {
 		trimmed = trimmed[:len(trimmed)-1]
 	}

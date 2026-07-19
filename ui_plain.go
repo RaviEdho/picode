@@ -20,18 +20,20 @@ const (
 	colorCyan   = ansiCyan
 	colorGreen  = ansiGreen
 	colorYellow = ansiYellow
-	colorFaded  = ansiDim + "\033[38;5;245m"
+	colorFaded  = ansiDim + "\033[38;5;248m"
 	clearEOL    = "\033[K"
 )
 
 // statusGradient is the subtle trail of the highlight that sweeps across the
 // response status text.
 var statusGradient = []string{
-	ansiDim + "\033[38;5;109m",
-	ansiDim + "\033[38;5;110m",
-	ansiDim + "\033[38;5;117m",
-	ansiDim + "\033[38;5;110m",
-	ansiDim + "\033[38;5;109m",
+	ansiDim + "\033[38;5;248m",
+	ansiDim + "\033[38;5;250m",
+	ansiDim + "\033[38;5;253m",
+	ansiDim + "\033[38;5;255m",
+	ansiDim + "\033[38;5;253m",
+	ansiDim + "\033[38;5;250m",
+	ansiDim + "\033[38;5;248m",
 }
 
 // PlainUI implements the current line-oriented terminal interface.
@@ -262,13 +264,18 @@ func (ui *PlainUI) animateStatus(initial string) (update func(string), stop func
 	var once sync.Once
 	var statusMu sync.Mutex
 	status := initial
+	const (
+		frameInterval = 60 * time.Millisecond
+		sweepInterval = 2 * time.Second
+	)
 	phase := 0
+	nextSweep := time.Now().Add(sweepInterval)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	writeStatus(ui.out, status, phase)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(60 * time.Millisecond)
+		ticker := time.NewTicker(frameInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -277,14 +284,26 @@ func (ui *PlainUI) animateStatus(initial string) (update func(string), stop func
 			case <-ticker.C:
 			}
 			statusMu.Lock()
-			phase++
+			now := time.Now()
+			cycle := len([]rune(status)) + len(statusGradient)
+			if !now.Before(nextSweep) {
+				phase = 0
+				nextSweep = now.Add(sweepInterval)
+			} else if phase < cycle-1 {
+				phase++
+			}
 			writeStatus(ui.out, status, phase)
 			statusMu.Unlock()
 		}
 	}()
 	update = func(value string) {
 		statusMu.Lock()
-		status = value
+		if status != value {
+			status = value
+			// Start the new status with a fresh sweep and reset its timer.
+			phase = 0
+			nextSweep = time.Now().Add(sweepInterval)
+		}
 		writeStatus(ui.out, value, phase)
 		statusMu.Unlock()
 	}
