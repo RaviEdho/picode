@@ -14,6 +14,13 @@ type streamedToolCall struct {
 	nameEmitted bool
 }
 
+// appendArguments appends one provider-supplied JSON fragment verbatim.
+// Tool-call arguments are structured data, not assistant Markdown: they must
+// never be normalized, rendered, or otherwise interpreted while streaming.
+func (c *streamedToolCall) appendArguments(fragment string) {
+	_, _ = c.arguments.WriteString(fragment)
+}
+
 // streamAssistant assembles a streamed response and emits UI updates.
 func streamAssistant(ctx context.Context, client ChatStreamer, history []Message, events EventSink) (*Message, *Usage, string, error) {
 	// Always finish the UI stream, including on errors and cancellation.
@@ -89,7 +96,7 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 				current.call.Function.Name = tc.Function.Name
 			}
 			if tc.Function.Arguments != "" {
-				_, _ = current.arguments.WriteString(tc.Function.Arguments)
+				current.appendArguments(tc.Function.Arguments)
 			}
 			arguments := current.arguments.String()
 			preview := displayToolInput(current.call.Function.Name, arguments)
