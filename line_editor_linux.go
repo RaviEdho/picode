@@ -163,6 +163,8 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 			switch key {
 			case "shift-enter":
 				current.insert('\n')
+			case "alt-enter":
+				current.insert('\n')
 			case "left":
 				if current.cursor > 0 {
 					current.cursor--
@@ -178,6 +180,11 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 			case "delete":
 				current.delete()
 			case "up":
+				// Move up within the buffer first; at the top edge Up recalls
+				// history. Multi-line history entries are navigated in turn.
+				if current.moveUp() {
+					break
+				}
 				if historyIndex == len(e.history) {
 					draft = current.String()
 				}
@@ -186,6 +193,9 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 					current.set(e.history[historyIndex])
 				}
 			case "down":
+				if current.moveDown() {
+					break
+				}
 				if historyIndex < len(e.history) {
 					historyIndex++
 					if historyIndex == len(e.history) {
@@ -229,12 +239,17 @@ func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	if e.renderCursorRow > 0 {
 		fmt.Fprintf(e.out, "\033[%dA", e.renderCursorRow)
 	}
-	display := strings.ReplaceAll(line.String(), "\n", "\n  ")
+	// OPOST is disabled in raw mode, so a bare LF only moves the cursor down one
+	// row without returning to column 0. Emit CR before every embedded newline so
+	// continuation lines render flush left and match the column-0 cursor model.
+	display := strings.ReplaceAll(line.String(), "\n", "\r\n")
 	fmt.Fprintf(e.out, "\033[J%s%s", prompt, display)
 
 	promptWidth := ansiDisplayWidth(prompt)
-	endRow := multilineEndRow(promptWidth, line.text, 2, columns)
-	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 2, columns)
+	// Continuation lines start at column 0 (flush left); the terminal wraps long
+	// lines on its own, so soft wraps and explicit newlines both align at col 0.
+	endRow := multilineEndRow(promptWidth, line.text, 0, columns)
+	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 0, columns)
 
 	// Position from the rendered end because leftward cursor movement does not cross rows consistently.
 	fmt.Fprint(e.out, "\r")
@@ -289,6 +304,12 @@ func (e *linuxLineEditor) readEscape(ctx context.Context) (string, error) {
 	first, err := e.readByte(ctx, escapeReadTimeout)
 	if err != nil {
 		return "", err
+	}
+	// Alt+Enter arrives as ESC followed by CR or LF, depending on the
+	// terminal's newline translation. This works even without the kitty
+	// keyboard protocol that powers Shift+Enter.
+	if first == '\r' || first == '\n' {
+		return "alt-enter", nil
 	}
 	if first == 'O' {
 		last, err := e.readByte(ctx, escapeReadTimeout)

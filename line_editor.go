@@ -59,6 +59,66 @@ func (l *editableLine) set(value string) {
 }
 
 func (l *editableLine) String() string { return string(l.text) }
+ 
+ // lineExtent returns the bounds of the logical input line holding the cursor.
+ // lineStart is the index immediately after the previous newline (or 0),
+ // lineEnd is the next newline (or len(text)), and lineIndex counts newlines
+ // before the cursor. Logical lines, not wrapped display rows, drive vertical
+ // cursor movement in the multi-line editor.
+ func (l *editableLine) lineExtent() (lineStart, lineEnd, lineIndex int) {
+ 	lineStart = 0
+ 	for i := 0; i < l.cursor; i++ {
+ 		if l.text[i] == '\n' {
+ 			lineStart = i + 1
+ 			lineIndex++
+ 		}
+ 	}
+ 	lineEnd = l.cursor
+ 	for lineEnd < len(l.text) && l.text[lineEnd] != '\n' {
+ 		lineEnd++
+ 	}
+ 	return lineStart, lineEnd, lineIndex
+ }
+ 
+ // moveUp moves the cursor to the same column on the previous logical line. It
+ // returns false on the first line so callers can fall back to history.
+ func (l *editableLine) moveUp() bool {
+ 	lineStart, _, lineIndex := l.lineExtent()
+ 	if lineIndex == 0 {
+ 		return false
+ 	}
+ 	column := l.cursor - lineStart
+ 	prevEnd := lineStart - 1 // the newline that ended the previous line
+ 	prevStart := prevEnd
+ 	for prevStart > 0 && l.text[prevStart-1] != '\n' {
+ 		prevStart--
+ 	}
+ 	if column > prevEnd-prevStart {
+ 		column = prevEnd - prevStart
+ 	}
+ 	l.cursor = prevStart + column
+ 	return true
+ }
+ 
+ // moveDown moves the cursor to the same column on the next logical line. It
+ // returns false on the last line so callers can fall back to history.
+ func (l *editableLine) moveDown() bool {
+ 	lineStart, lineEnd, _ := l.lineExtent()
+ 	if lineEnd >= len(l.text) {
+ 		return false
+ 	}
+ 	column := l.cursor - lineStart
+ 	nextStart := lineEnd + 1
+ 	nextEnd := nextStart
+ 	for nextEnd < len(l.text) && l.text[nextEnd] != '\n' {
+ 		nextEnd++
+ 	}
+ 	if column > nextEnd-nextStart {
+ 		column = nextEnd - nextStart
+ 	}
+ 	l.cursor = nextStart + column
+ 	return true
+ }
 
 // completePath completes the path-like word immediately before the cursor.
 // It intentionally does not invoke a shell, so completion remains predictable

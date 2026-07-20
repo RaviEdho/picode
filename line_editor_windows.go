@@ -25,6 +25,8 @@ const (
 	winControlKeyShift = 0x0010
 	winLeftCtrl        = 0x0008
 	winRightCtrl       = 0x0004
+	winLeftAlt         = 0x0002
+	winRightAlt        = 0x0001
 )
 
 var (
@@ -132,7 +134,8 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 			continue
 		}
 		if key.VirtualKeyCode == 0x0D { // Enter.
-			if key.ControlKeyState&winControlKeyShift != 0 || key.ControlKeyState&0x0010 != 0 {
+			altOrShift := key.ControlKeyState&(winControlKeyShift|winLeftAlt|winRightAlt) != 0
+			if altOrShift {
 				line.insert('\n')
 				e.redraw(prompt, line)
 				continue
@@ -176,6 +179,10 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 			line.delete()
 			e.redraw(prompt, line)
 		case 0x26:
+			if line.moveUp() {
+				e.redraw(prompt, line)
+				break
+			}
 			if historyIndex == len(e.history) {
 				draft = line.String()
 			}
@@ -185,6 +192,10 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 				e.redraw(prompt, line)
 			}
 		case 0x28:
+			if line.moveDown() {
+				e.redraw(prompt, line)
+				break
+			}
 			if historyIndex < len(e.history) {
 				historyIndex++
 				if historyIndex == len(e.history) {
@@ -250,11 +261,14 @@ func (e *windowsLineEditor) redraw(prompt string, line *editableLine) {
 	if e.renderCursorRow > 0 {
 		fmt.Fprintf(e.out, "\033[%dA", e.renderCursorRow)
 	}
-	display := strings.ReplaceAll(line.String(), "\n", "\n  ")
+	// The console writes a bare LF as a line down with no carriage return, so
+	// emit CR before each embedded newline to keep continuation lines flush left.
+	display := strings.ReplaceAll(line.String(), "\n", "\r\n")
 	fmt.Fprintf(e.out, "\033[J%s%s", prompt, display)
 	promptWidth := ansiDisplayWidth(prompt)
-	endRow := multilineEndRow(promptWidth, line.text, 2, columns)
-	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 2, columns)
+	// Continuation lines start at column 0 (flush left).
+	endRow := multilineEndRow(promptWidth, line.text, 0, columns)
+	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 0, columns)
 	fmt.Fprint(e.out, "\r")
 	if endRow > cursorRow {
 		fmt.Fprintf(e.out, "\033[%dA", endRow-cursorRow)

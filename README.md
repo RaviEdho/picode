@@ -75,6 +75,16 @@ picode -sessions
 
 Exit with `exit`, `quit`, or `Ctrl-D`.
 
+## Multi-line input
+
+The prompt supports multi-line messages. Press Enter to send. Insert a newline within the message instead with any of:
+
+- **Shift+Enter** (kitty keyboard-protocol terminals)
+- **Alt+Enter** / **Option+Enter** (Linux/macOS, works in most terminals)
+- **Shift+Enter** or **Alt+Enter** on Windows
+
+Use the Up and Down arrow keys to move between lines of the current message; at the top edge, Up recalls history, and at the bottom edge, Down returns to the draft or later history entries.
+
 ## System prompt
 
 The built-in prompt can be overridden with `-system` or `-system-file`. Without those flags, Picode checks `PICODE_SYSTEM`, then `PICODE_SYSTEM_FILE`, then uses the built-in prompt. Runtime platform, shell, working directory, and date are appended automatically.
