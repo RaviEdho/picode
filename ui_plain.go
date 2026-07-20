@@ -363,14 +363,19 @@ func (ui *PlainUI) printHistory(messages []Message) {
 
 // printSummary renders the final session token counts.
 func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string, resumable bool) {
-	fmt.Fprintf(ui.out, "\n%s session ended%s - %s%d%s tokens total, %s%d%s sent (+%s%d%s cached), %s%d%s received",
-		ansiBlue, colorReset,
-		ansiYellow, usage.Total(), colorReset,
-		ansiCyan, usage.Prompt-usage.Cached, colorReset,
-		colorFaded, usage.Cached, colorReset,
-		ansiGreen, usage.Completion, colorReset)
-	if usage.Cost != nil {
-		fmt.Fprintf(ui.out, ", %s$%.6f%s cost", ansiMagenta, *usage.Cost, colorReset)
+	tokensAvailable := usage.Total() > 0 || (usage.Cost != nil && *usage.Cost > 0)
+	if tokensAvailable {
+		fmt.Fprintf(ui.out, "\n%s session ended%s - %s%d%s tokens total, %s%d%s sent (+%s%d%s cached), %s%d%s received",
+			ansiBlue, colorReset,
+			ansiYellow, usage.Total(), colorReset,
+			ansiCyan, usage.Prompt-usage.Cached, colorReset,
+			colorFaded, usage.Cached, colorReset,
+			ansiGreen, usage.Completion, colorReset)
+		if usage.Cost != nil {
+			fmt.Fprintf(ui.out, ", %s$%.6f%s cost", ansiMagenta, *usage.Cost, colorReset)
+		}
+	} else {
+		fmt.Fprintf(ui.out, "\n%s session ended%s", ansiBlue, colorReset)
 	}
 	fmt.Fprintln(ui.out)
 	if resumable {
