@@ -61,10 +61,10 @@ type searchArgs struct {
 func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResult {
 	var args searchArgs
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		return ToolResult{Output: fmt.Sprintf("error: invalid arguments: %v", err), Status: ToolFailed}
+		return ToolResult{Output: invalidToolError("arguments", "must be valid JSON", err).Error(), Status: ToolFailed}
 	}
 	if strings.TrimSpace(args.Query) == "" {
-		return failedSearchResult(args.Query, errors.New("query is required"))
+		return failedSearchResult(args.Query, invalidToolError("query", "is required; provide text or a regular expression", nil))
 	}
 	args.Path = strings.TrimSpace(args.Path)
 	matchFilenames := args.Path == ""
@@ -75,13 +75,13 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		args.MaxResults = searchDefaultMaxResults
 	}
 	if args.MaxResults < 1 || args.MaxResults > searchMaxResults {
-		return failedSearchResult(args.Query, fmt.Errorf("max_results must be between 1 and %d", searchMaxResults))
+		return failedSearchResult(args.Query, invalidToolError("max_results", fmt.Sprintf("must be 1-%d; default %d", searchMaxResults, searchDefaultMaxResults), nil))
 	}
 	if args.ContextLines < 0 || args.ContextLines > searchMaxContext {
-		return failedSearchResult(args.Query, fmt.Errorf("context_lines must be between 0 and %d", searchMaxContext))
+		return failedSearchResult(args.Query, invalidToolError("context_lines", fmt.Sprintf("must be 0-%d; default %d", searchMaxContext, searchDefaultContext), nil))
 	}
 	if err := ctx.Err(); err != nil {
-		return ToolResult{Input: args.Query, Output: fmt.Sprintf("error: search aborted: %v", err), Status: ToolAborted}
+		return toolAbortedResult(args.Query, err)
 	}
 
 	var matcher func(string) bool
@@ -96,7 +96,7 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		}
 		re, err := regexp.Compile(pattern)
 		if err != nil {
-			return failedSearchResult(args.Query, fmt.Errorf("invalid regex: %w", err))
+			return failedSearchResult(args.Query, invalidToolError("regex", "must be a valid regular expression", err))
 		}
 		matcher = re.MatchString
 	} else {
@@ -117,7 +117,7 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 		root, err = filepath.EvalSymlinks(root)
 	}
 	if err != nil {
-		return failedSearchResult(args.Query, fmt.Errorf("resolve working directory: %w", err))
+		return failedSearchResult(args.Query, ioToolError(fmt.Errorf("resolve working directory: %w", err)))
 	}
 	searchRoot, err := safeSearchPath(root, args.Path)
 	if err != nil {
@@ -197,9 +197,9 @@ func (e *ToolExecutor) executeSearch(ctx context.Context, tc ToolCall) ToolResul
 	}
 	if walkErr != nil {
 		if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
-			return ToolResult{Input: args.Query, Output: fmt.Sprintf("error: search aborted: %v", walkErr), Status: ToolAborted}
+			return toolAbortedResult(args.Query, walkErr)
 		}
-		return failedSearchResult(args.Path, fmt.Errorf("search %q: %w", args.Path, walkErr))
+		return failedSearchResult(args.Path, ioToolError(fmt.Errorf("search %q: %w", args.Path, walkErr)))
 	}
 	if matched == 0 {
 		output.WriteString("(no matches)\n")
@@ -315,23 +315,23 @@ func bytesLookBinary(data []byte) bool {
 
 func safeSearchPath(root, name string) (string, error) {
 	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
-		return "", fmt.Errorf("unsafe path %q: paths must be relative", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	clean := filepath.Clean(name)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: path escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	full := filepath.Join(root, clean)
 	resolved, err := filepath.EvalSymlinks(full)
 	if err != nil {
-		return "", fmt.Errorf("resolve %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("resolve %q: %w", name, err))
 	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: symlink escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	if _, err := os.Stat(resolved); err != nil {
-		return "", fmt.Errorf("stat %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("stat %q: %w", name, err))
 	}
 	return resolved, nil
 }
@@ -346,5 +346,5 @@ func isSkippedSearchDirectory(name string) bool {
 }
 
 func failedSearchResult(input string, err error) ToolResult {
-	return ToolResult{Input: input, Output: fmt.Sprintf("error: %v", err), Status: ToolFailed}
+	return ToolResult{Input: input, Output: err.Error(), Status: ToolFailed}
 }

@@ -155,7 +155,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, tc ToolCall) ToolResult {
 		return e.executeApplyPatch(ctx, tc)
 	default:
 		return ToolResult{
-			Output: fmt.Sprintf("error: unknown tool: %s", tc.Function.Name),
+			Output: invalidToolError("tool", "must name a supported tool", fmt.Errorf("unknown tool: %s", tc.Function.Name)).Error(),
 			Status: ToolFailed,
 		}
 	}

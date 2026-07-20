@@ -64,32 +64,32 @@ func (e *ToolExecutor) executeApplyPatch(ctx context.Context, tc ToolCall) ToolR
 		Patch string `json:"patch"`
 	}
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		return failedPatchResult("", fmt.Errorf("invalid arguments: %w", err))
+		return failedPatchResult("", invalidToolError("arguments", "must be valid JSON", err))
 	}
 	if err := ctx.Err(); err != nil {
-		return ToolResult{Input: args.Patch, Output: fmt.Sprintf("error: patch aborted: %v", err), Status: ToolAborted}
+		return toolAbortedResult(args.Patch, err)
 	}
 
 	operations, err := parsePatch(args.Patch)
 	if err != nil {
-		return failedPatchResult(args.Patch, err)
+		return failedPatchResult(args.Patch, invalidToolError("patch", "must be a complete structured patch", err))
 	}
 	root, err := filepath.Abs(".")
 	if err == nil {
 		root, err = filepath.EvalSymlinks(root)
 	}
 	if err != nil {
-		return failedPatchResult(args.Patch, fmt.Errorf("resolve working directory: %w", err))
+		return failedPatchResult(args.Patch, ioToolError(fmt.Errorf("resolve working directory: %w", err)))
 	}
 	plans, err := preparePatch(root, operations)
 	if err != nil {
 		return failedPatchResult(args.Patch, err)
 	}
 	if err := ctx.Err(); err != nil {
-		return ToolResult{Input: args.Patch, Output: fmt.Sprintf("error: patch aborted: %v", err), Status: ToolAborted}
+		return toolAbortedResult(args.Patch, err)
 	}
 	if err := commitPatch(plans); err != nil {
-		return failedPatchResult(args.Patch, err)
+		return failedPatchResult(args.Patch, ioToolError(err))
 	}
 
 	var output strings.Builder
@@ -150,7 +150,11 @@ func positiveDelta(value int) int {
 }
 
 func failedPatchResult(patch string, err error) ToolResult {
-	return ToolResult{Input: patch, Output: fmt.Sprintf("error: %v", err), Status: ToolFailed}
+	output := err.Error()
+	if !strings.HasPrefix(output, "invalid ") && !strings.HasPrefix(output, "bad path ") && !strings.HasPrefix(output, "io error:") {
+		output = invalidToolError("patch", "must be a valid structured patch", err).Error()
+	}
+	return ToolResult{Input: patch, Output: output, Status: ToolFailed}
 }
 
 func parsePatch(text string) ([]patchOperation, error) {
@@ -355,18 +359,18 @@ func preparePatch(root string, operations []patchOperation) ([]patchPlan, error)
 			plan.content = []byte(strings.Join(op.lines, "\n") + "\n")
 		case patchUpdate, patchDelete:
 			if statErr != nil {
-				return nil, fmt.Errorf("open %q: %w", op.path, statErr)
+				return nil, ioToolError(fmt.Errorf("open %q: %w", op.path, statErr))
 			}
 			if !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("%q is not a regular file", op.path)
+				return nil, ioToolError(fmt.Errorf("%q is not a regular file", op.path))
 			}
 			plan.mode = info.Mode().Perm()
 			plan.original, err = os.ReadFile(fullPath)
 			if err != nil {
-				return nil, fmt.Errorf("read %q: %w", op.path, err)
+				return nil, ioToolError(fmt.Errorf("read %q: %w", op.path, err))
 			}
 			if !utf8.Valid(plan.original) {
-				return nil, fmt.Errorf("%q is not valid UTF-8", op.path)
+				return nil, ioToolError(fmt.Errorf("%q is not valid UTF-8", op.path))
 			}
 			if op.kind == patchUpdate {
 				plan.content, err = applyPatchHunks(op.path, plan.original, op.hunks)
@@ -382,11 +386,11 @@ func preparePatch(root string, operations []patchOperation) ([]patchPlan, error)
 
 func safePatchPath(root, name string, adding bool) (string, error) {
 	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
-		return "", fmt.Errorf("unsafe path %q: paths must be relative", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	clean := filepath.Clean(name)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: path escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	full := filepath.Join(root, clean)
 	check := full
@@ -395,15 +399,15 @@ func safePatchPath(root, name string, adding bool) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(check)
 	if err != nil {
-		return "", fmt.Errorf("resolve %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("resolve %q: %w", name, err))
 	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: symlink escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	if !adding {
 		if info, err := os.Lstat(full); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("unsafe path %q: symbolic links cannot be patched", name)
+			return "", badPathToolError(name, "symbolic links cannot be patched; use the target's relative path")
 		}
 	}
 	return full, nil

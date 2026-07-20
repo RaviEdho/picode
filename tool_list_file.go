@@ -41,7 +41,7 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 		MaxEntries int    `json:"max_entries"`
 	}
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		return ToolResult{Output: fmt.Sprintf("error: invalid arguments: %v", err), Status: ToolFailed}
+		return ToolResult{Output: invalidToolError("arguments", "must be valid JSON", err).Error(), Status: ToolFailed}
 	}
 	args.Path = strings.TrimSpace(args.Path)
 	if args.Path == "" {
@@ -51,16 +51,16 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 		args.Depth = listFileDefaultDepth
 	}
 	if args.Depth < 1 || args.Depth > listFileMaxDepth {
-		return failedListFileResult(args.Path, fmt.Errorf("depth must be between 1 and %d", listFileMaxDepth))
+		return failedListFileResult(args.Path, invalidToolError("depth", fmt.Sprintf("must be 1-%d; default %d", listFileMaxDepth, listFileDefaultDepth), nil))
 	}
 	if args.MaxEntries == 0 {
 		args.MaxEntries = listFileDefaultEntries
 	}
 	if args.MaxEntries < 1 || args.MaxEntries > listFileMaxEntries {
-		return failedListFileResult(args.Path, fmt.Errorf("max_entries must be between 1 and %d", listFileMaxEntries))
+		return failedListFileResult(args.Path, invalidToolError("max_entries", fmt.Sprintf("must be 1-%d; default %d", listFileMaxEntries, listFileDefaultEntries), nil))
 	}
 	if err := ctx.Err(); err != nil {
-		return ToolResult{Input: args.Path, Output: fmt.Sprintf("error: list aborted: %v", err), Status: ToolAborted}
+		return toolAbortedResult(args.Path, err)
 	}
 
 	root, err := filepath.Abs(".")
@@ -68,7 +68,7 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 		root, err = filepath.EvalSymlinks(root)
 	}
 	if err != nil {
-		return failedListFileResult(args.Path, fmt.Errorf("resolve working directory: %w", err))
+		return failedListFileResult(args.Path, ioToolError(fmt.Errorf("resolve working directory: %w", err)))
 	}
 	directory, err := safeListDirectoryPath(root, args.Path)
 	if err != nil {
@@ -124,9 +124,9 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 	}
 	if walkErr != nil {
 		if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
-			return ToolResult{Input: args.Path, Output: fmt.Sprintf("error: list aborted: %v", walkErr), Status: ToolAborted}
+			return toolAbortedResult(args.Path, walkErr)
 		}
-		return failedListFileResult(args.Path, fmt.Errorf("list %q: %w", args.Path, walkErr))
+		return failedListFileResult(args.Path, ioToolError(fmt.Errorf("walk %q: %w", args.Path, walkErr)))
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 
@@ -152,32 +152,32 @@ func (e *ToolExecutor) executeListFile(ctx context.Context, tc ToolCall) ToolRes
 var errListLimit = errors.New("list entry limit reached")
 
 func failedListFileResult(path string, err error) ToolResult {
-	return ToolResult{Input: path, Output: fmt.Sprintf("error: %v", err), Status: ToolFailed}
+	return ToolResult{Input: path, Output: err.Error(), Status: ToolFailed}
 }
 
 func safeListDirectoryPath(root, name string) (string, error) {
 	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
-		return "", fmt.Errorf("unsafe path %q: paths must be relative", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	clean := filepath.Clean(name)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: path escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	full := filepath.Join(root, clean)
 	resolved, err := filepath.EvalSymlinks(full)
 	if err != nil {
-		return "", fmt.Errorf("resolve %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("resolve %q: %w", name, err))
 	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: symlink escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("stat %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("stat %q: %w", name, err))
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("%q is not a directory", name)
+		return "", ioToolError(fmt.Errorf("%q is not a directory", name))
 	}
 	return resolved, nil
 }

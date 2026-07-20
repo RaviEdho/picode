@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -42,14 +41,23 @@ func (e *ToolExecutor) executeRunCommand(ctx context.Context, tc ToolCall) ToolR
 	}
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 		return ToolResult{
-			Output: fmt.Sprintf("error: invalid arguments: %v", err),
+			Output: invalidToolError("arguments", "must be valid JSON", err).Error(),
 			Status: ToolFailed,
 		}
 	}
 
 	output, status, err := e.runShellCommand(ctx, args.Command)
 	if err != nil {
-		output = fmt.Sprintf("error: %v", err)
+		if status == ToolCancelled || status == ToolTimedOut || status == ToolAborted {
+			output = toolAbortedOutput(commandCancellationCause(status, err))
+			if status == ToolCancelled {
+				output = "aborted: canceled by user"
+			} else if status == ToolTimedOut {
+				output = "aborted: timed out after 30s"
+			}
+		} else {
+			output = ioToolError(err).Error()
+		}
 	}
 	if output == "" {
 		output = "(no output)"
@@ -183,10 +191,21 @@ func (o *boundedCommandOutput) String() string {
 func commandCancellation(cause error) (ToolStatus, error) {
 	switch {
 	case errors.Is(cause, errToolCancelled):
-		return ToolCancelled, fmt.Errorf("command cancelled by user (Ctrl-C)")
+		return ToolCancelled, cause
 	case errors.Is(cause, errToolTimedOut):
-		return ToolTimedOut, fmt.Errorf("command timed out after 30s")
+		return ToolTimedOut, cause
 	default:
-		return ToolAborted, fmt.Errorf("command aborted: %w", cause)
+		return ToolAborted, cause
+	}
+}
+
+func commandCancellationCause(status ToolStatus, err error) error {
+	switch status {
+	case ToolCancelled:
+		return context.Canceled
+	case ToolTimedOut:
+		return context.DeadlineExceeded
+	default:
+		return err
 	}
 }

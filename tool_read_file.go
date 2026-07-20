@@ -42,21 +42,21 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 		EndLine   int    `json:"end_line"`
 	}
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		return ToolResult{Output: fmt.Sprintf("error: invalid arguments: %v", err), Status: ToolFailed}
+		return ToolResult{Output: invalidToolError("arguments", "must be valid JSON", err).Error(), Status: ToolFailed}
 	}
 
 	args.Path = strings.TrimSpace(args.Path)
 	if args.Path == "" {
-		return failedReadFileResult(args.Path, errors.New("path is required"))
+		return failedReadFileResult(args.Path, invalidToolError("path", "is required; provide a relative file path", nil))
 	}
 	if args.StartLine == 0 {
 		args.StartLine = 1
 	}
 	if args.StartLine < 1 {
-		return failedReadFileResult(args.Path, errors.New("start_line must be at least 1"))
+		return failedReadFileResult(args.Path, invalidToolError("start_line", "must be at least 1; use a 1-based line number", nil))
 	}
 	if args.EndLine < 0 {
-		return failedReadFileResult(args.Path, errors.New("end_line must be at least 1"))
+		return failedReadFileResult(args.Path, invalidToolError("end_line", "must be at least 1; use 0 for the default range", nil))
 	}
 	if args.EndLine == 0 {
 		args.EndLine = maxInt()
@@ -65,13 +65,13 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 		}
 	}
 	if args.EndLine < args.StartLine {
-		return failedReadFileResult(args.Path, errors.New("end_line must not be before start_line"))
+		return failedReadFileResult(args.Path, invalidToolError("end_line", "must not be before start_line; use start_line or a later line", nil))
 	}
 	if args.EndLine-args.StartLine+1 > readFileMaxLines {
 		args.EndLine = args.StartLine + readFileMaxLines - 1
 	}
 	if err := ctx.Err(); err != nil {
-		return ToolResult{Input: args.Path, Output: fmt.Sprintf("error: read aborted: %v", err), Status: ToolAborted}
+		return toolAbortedResult(args.Path, err)
 	}
 
 	root, err := filepath.Abs(".")
@@ -79,7 +79,7 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 		root, err = filepath.EvalSymlinks(root)
 	}
 	if err != nil {
-		return failedReadFileResult(args.Path, fmt.Errorf("resolve working directory: %w", err))
+		return failedReadFileResult(args.Path, ioToolError(fmt.Errorf("resolve working directory: %w", err)))
 	}
 	path, err := safeReadFilePath(root, args.Path)
 	if err != nil {
@@ -88,7 +88,7 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 
 	file, err := os.Open(path)
 	if err != nil {
-		return failedReadFileResult(args.Path, fmt.Errorf("open %q: %w", args.Path, err))
+		return failedReadFileResult(args.Path, ioToolError(fmt.Errorf("open %q: %w", args.Path, err)))
 	}
 	defer file.Close()
 
@@ -98,14 +98,14 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 	truncatedOutput := false
 	for {
 		if err := ctx.Err(); err != nil {
-			return ToolResult{Input: args.Path, Output: fmt.Sprintf("error: read aborted: %v", err), Status: ToolAborted}
+			return toolAbortedResult(args.Path, err)
 		}
 		line, lineTruncated, readErr := readBoundedLine(reader)
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return failedReadFileResult(args.Path, fmt.Errorf("read %q: %w", args.Path, readErr))
+			return failedReadFileResult(args.Path, ioToolError(fmt.Errorf("read %q: %w", args.Path, readErr)))
 		}
 		lineNumber++
 		if !utf8.ValidString(line) {
@@ -114,7 +114,7 @@ func (e *ToolExecutor) executeReadFile(ctx context.Context, tc ToolCall) ToolRes
 				line = trimIncompleteUTF8Suffix(line)
 			}
 			if !utf8.ValidString(line) {
-				return failedReadFileResult(args.Path, fmt.Errorf("%q is not valid UTF-8", args.Path))
+				return failedReadFileResult(args.Path, ioToolError(fmt.Errorf("%q is not valid UTF-8", args.Path)))
 			}
 		}
 		if lineNumber < args.StartLine {
@@ -164,33 +164,33 @@ func trimIncompleteUTF8Suffix(line string) string {
 }
 
 func failedReadFileResult(path string, err error) ToolResult {
-	return ToolResult{Input: path, Output: fmt.Sprintf("error: %v", err), Status: ToolFailed}
+	return ToolResult{Input: path, Output: err.Error(), Status: ToolFailed}
 }
 
 // safeReadFilePath permits only files whose resolved path remains below root.
 func safeReadFilePath(root, name string) (string, error) {
 	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
-		return "", fmt.Errorf("unsafe path %q: paths must be relative", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	clean := filepath.Clean(name)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: path escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	full := filepath.Join(root, clean)
 	resolved, err := filepath.EvalSymlinks(full)
 	if err != nil {
-		return "", fmt.Errorf("resolve %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("resolve %q: %w", name, err))
 	}
 	rel, err := filepath.Rel(root, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe path %q: symlink escapes the working directory", name)
+		return "", badPathToolError(name, "must be relative to the working directory")
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("stat %q: %w", name, err)
+		return "", ioToolError(fmt.Errorf("stat %q: %w", name, err))
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", name)
+		return "", ioToolError(fmt.Errorf("%q is not a regular file", name))
 	}
 	return resolved, nil
 }
