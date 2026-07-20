@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -155,8 +157,13 @@ func parsePatch(text string) ([]patchOperation, error) {
 		return nil, fmt.Errorf("patch is not valid UTF-8")
 	}
 	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.TrimSuffix(text, "\n")
 	lines := strings.Split(text, "\n")
+	// Ignore whitespace-only lines after the sentinel, but do not accept any
+	// other trailing data. This makes the sentinel check explicit and prevents
+	// truncated or contaminated tool output from being treated as a patch.
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
 	if len(lines) < 2 || lines[0] != "*** Begin Patch" || lines[len(lines)-1] != "*** End Patch" {
 		return nil, fmt.Errorf("patch must start with *** Begin Patch and end with *** End Patch")
 	}
@@ -184,7 +191,11 @@ func parsePatch(text string) ([]patchOperation, error) {
 				if !strings.HasPrefix(lines[i], "+") {
 					return nil, fmt.Errorf("line %d: added file lines must begin with +", i+1)
 				}
-				op.lines = append(op.lines, lines[i][1:])
+				line := lines[i][1:]
+				if err := validateAddedFileLine(path, i+1, line); err != nil {
+					return nil, err
+				}
+				op.lines = append(op.lines, line)
 				i++
 			}
 		case patchDelete:
@@ -240,6 +251,40 @@ func parsePatchHeader(line string) (patchOperationKind, string, bool) {
 func isPatchHeader(line string) bool {
 	_, _, ok := parsePatchHeader(line)
 	return ok
+}
+
+// validateAddedFileLine rejects common signs that a patch body was truncated
+// or contaminated by the tool-call wrapper. It intentionally only rejects
+// marker-shaped fragments: ellipses are valid source and prose in many other
+// positions.
+func validateAddedFileLine(path string, lineNumber int, line string) error {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "</parameter>" || trimmed == "endregion" || trimmed == "#endregion" {
+		return fmt.Errorf("line %d: add %q contains a possible truncated tool-output marker %q", lineNumber, path, trimmed)
+	}
+	if trimmed == "..." {
+		return fmt.Errorf("line %d: add %q contains a possible truncation marker", lineNumber, path)
+	}
+	for offset := 0; ; {
+		relative := strings.Index(line[offset:], "...")
+		if relative < 0 {
+			break
+		}
+		index := offset + relative
+		before, after := line[:index], line[index+3:]
+		if strings.TrimSpace(before) == "" || strings.TrimSpace(after) == "" {
+			return fmt.Errorf("line %d: add %q contains a possible truncation marker", lineNumber, path)
+		}
+		beforeRunes := []rune(before)
+		if !unicode.IsSpace(beforeRunes[len(beforeRunes)-1]) {
+			afterRunes := []rune(strings.TrimLeftFunc(after, unicode.IsSpace))
+			if len(afterRunes) > 0 && (unicode.IsLetter(afterRunes[0]) || unicode.IsDigit(afterRunes[0])) {
+				return fmt.Errorf("line %d: add %q contains a possible truncation marker", lineNumber, path)
+			}
+		}
+		offset = index + 3
+	}
+	return nil
 }
 
 func preparePatch(root string, operations []patchOperation) ([]patchPlan, error) {
@@ -393,16 +438,38 @@ func commitPatch(plans []patchPlan) error {
 	committed := 0
 	for i, plan := range plans {
 		var err error
+		written := false
 		if plan.kind == patchDelete {
 			err = os.Remove(plan.fullPath)
 		} else {
 			err = atomicWriteFile(plan.fullPath, plan.content, plan.mode)
+			written = err == nil
+			if err == nil {
+				err = verifyPatchWrite(plan)
+			}
 		}
 		if err != nil {
-			rollbackPatch(plans[:committed])
+			rollbackEnd := committed
+			if written {
+				// The current file was written successfully but failed its
+				// integrity check, so it must be part of the rollback too.
+				rollbackEnd = i + 1
+			}
+			rollbackPatch(plans[:rollbackEnd])
 			return fmt.Errorf("apply %q: %w", plan.path, err)
 		}
 		committed = i + 1
+	}
+	return nil
+}
+
+func verifyPatchWrite(plan patchPlan) error {
+	got, err := os.ReadFile(plan.fullPath)
+	if err != nil {
+		return fmt.Errorf("verify %q: %w", plan.path, err)
+	}
+	if !bytes.Equal(got, plan.content) {
+		return fmt.Errorf("verify %q: written content does not match the patch", plan.path)
 	}
 	return nil
 }

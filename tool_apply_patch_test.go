@@ -109,5 +109,63 @@ func TestExecuteApplyPatchDoubleBacktick(t *testing.T) {
 	}
 }
 
+func TestParsePatchRejectsContaminatedAddFileLines(t *testing.T) {
+	for _, line := range []string{"...", "Body paragra...", "</parameter>", "endregion", "#endregion"} {
+		t.Run(line, func(t *testing.T) {
+			patch := begin() + "*** Add File: new.md\n+" + line + "\n" + end()
+			if _, err := parsePatch(patch); err == nil {
+				t.Fatalf("parsePatch accepted possible truncation marker %q", line)
+			}
+		})
+	}
+}
+
+func TestParsePatchAllowsWhitespaceAfterEndSentinel(t *testing.T) {
+	patch := begin() + "*** Add File: new.md\n+content\n*** End Patch\n \n\t\n"
+	if _, err := parsePatch(patch); err != nil {
+		t.Fatalf("parsePatch rejected trailing whitespace: %v", err)
+	}
+}
+
+func TestExecuteApplyPatchAddFileWritesExactContent(t *testing.T) {
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+
+	patch := begin() +
+		"*** Add File: new.md\n" +
+		"+# New Doc\n" +
+		"+Body paragraph one.\n" +
+		"+Further text here.\n" +
+		end()
+	args, err := json.Marshal(struct {
+		Patch string `json:"patch"`
+	}{Patch: patch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := NewToolExecutor().executeApplyPatch(context.Background(), ToolCall{
+		Function: ToolCallFunc{Name: "apply_patch", Arguments: string(args)},
+	})
+	if res.Status != ToolCompleted {
+		t.Fatalf("executeApplyPatch failed: status=%s output=%s", res.Status, res.Output)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "new.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# New Doc\nBody paragraph one.\nFurther text here.\n"
+	if string(got) != want {
+		t.Fatalf("file content mismatch:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
 func begin() string { return "*** Begin Patch\n" }
-func end() string { return "*** End Patch\n" }
+func end() string   { return "*** End Patch\n" }
