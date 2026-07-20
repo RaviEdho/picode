@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,98 @@ func TestBacktickContextLines(t *testing.T) {
 				t.Fatalf("got=%q want=%q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMarkdownBulletLinesCanBeRemovedTogether(t *testing.T) {
+	content := "# Tools\n- Use them only when needed.\n- Inspect before editing.\n- Keep each step minimal.\n\n# Responses\n"
+	patch := begin() +
+		"*** Update File: scratch.txt\n" +
+		"@@ # Tools\n" +
+		"-- Use them only when needed.\n" +
+		"-- Inspect before editing.\n" +
+		" - Keep each step minimal.\n" +
+		end()
+
+	ops, err := parsePatch(patch)
+	if err != nil {
+		t.Fatalf("parsePatch error: %v", err)
+	}
+	got, err := applyPatchHunks("scratch.txt", []byte(content), ops[0].hunks)
+	if err != nil {
+		t.Fatalf("applyPatchHunks error: %v", err)
+	}
+	want := "# Tools\n- Keep each step minimal.\n\n# Responses\n"
+	if string(got) != want {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestPatchContextMismatchReportsFirstDifference(t *testing.T) {
+	content := "# Section\nactual line\n"
+	patch := begin() +
+		"*** Update File: scratch.txt\n" +
+		"@@ # Section\n" +
+		" expected line\n" +
+		end()
+
+	ops, err := parsePatch(patch)
+	if err != nil {
+		t.Fatalf("parsePatch error: %v", err)
+	}
+	_, err = applyPatchHunks("scratch.txt", []byte(content), ops[0].hunks)
+	if err == nil {
+		t.Fatal("applyPatchHunks unexpectedly succeeded")
+	}
+	message := err.Error()
+	for _, want := range []string{"context did not match", "actual line", "expected line"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error %q does not contain %q", message, want)
+		}
+	}
+}
+
+func TestPatchSectionAnchorDisambiguatesRepeatedContext(t *testing.T) {
+	content := "# First\n- same bullet\n# Second\n- same bullet\n"
+	patch := begin() +
+		"*** Update File: scratch.txt\n" +
+		"@@ # Second\n" +
+		"-- same bullet\n" +
+		end()
+
+	ops, err := parsePatch(patch)
+	if err != nil {
+		t.Fatalf("parsePatch error: %v", err)
+	}
+	got, err := applyPatchHunks("scratch.txt", []byte(content), ops[0].hunks)
+	if err != nil {
+		t.Fatalf("applyPatchHunks error: %v", err)
+	}
+	want := "# First\n- same bullet\n# Second\n"
+	if string(got) != want {
+		t.Fatalf("got=%q want=%q", got, want)
+	}
+}
+
+func TestPatchSectionAnchorLimitsSearchToSection(t *testing.T) {
+	content := "# First\n- same bullet\n# Second\n- same bullet\n"
+	patch := begin() +
+		"*** Update File: scratch.txt\n" +
+		"@@ # First\n" +
+		"-- same bullet\n" +
+		end()
+
+	ops, err := parsePatch(patch)
+	if err != nil {
+		t.Fatalf("parsePatch error: %v", err)
+	}
+	got, err := applyPatchHunks("scratch.txt", []byte(content), ops[0].hunks)
+	if err != nil {
+		t.Fatalf("applyPatchHunks error: %v", err)
+	}
+	want := "# First\n# Second\n- same bullet\n"
+	if string(got) != want {
+		t.Fatalf("got=%q want=%q", got, want)
 	}
 }
 

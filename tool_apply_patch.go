@@ -28,7 +28,8 @@ type patchOperation struct {
 }
 
 type patchHunk struct {
-	lines []patchLine
+	anchor string
+	lines  []patchLine
 }
 
 type patchLine struct {
@@ -49,7 +50,7 @@ type patchPlan struct {
 func applyPatchTool() Tool {
 	return functionTool(
 		"apply_patch",
-		"Apply the smallest complete structured patch in cwd. Inspect first; preserve unrelated changes; combine related edits; don't rewrite unnecessarily. Use *** Begin Patch/End Patch with Add File, Update File, or Delete File sections. Update @@ hunks prefix lines with space (context), + (add), or - (remove). Paths are relative; validate before changing files.",
+		"Apply the smallest complete structured patch in cwd. Inspect first; preserve unrelated changes; combine related edits; don't rewrite unnecessarily. Use *** Begin Patch/End Patch with Add File, Update File, or Delete File sections. Update @@ hunks prefix lines with space (context), + (add), or - (remove); use @@ # Section as an exact section anchor when useful. A removed Markdown bullet starts with -- so the literal bullet dash is preserved. Paths are relative; validate before changing files.",
 		map[string]any{
 			"patch": stringParameter("Complete structured patch to apply."),
 		},
@@ -208,7 +209,7 @@ func parsePatch(text string) ([]patchOperation, error) {
 					return nil, fmt.Errorf("line %d: expected @@ hunk header", i+1)
 				}
 				i++
-				hunk := patchHunk{}
+				hunk := patchHunk{anchor: parsePatchHunkAnchor(lines[i-1])}
 				for i < len(lines)-1 && !isPatchHeader(lines[i]) && !strings.HasPrefix(lines[i], "@@") {
 					if lines[i] == "\\ No newline at end of file" {
 						return nil, fmt.Errorf("line %d: no-newline markers are not supported", i+1)
@@ -251,6 +252,47 @@ func parsePatchHeader(line string) (patchOperationKind, string, bool) {
 func isPatchHeader(line string) bool {
 	_, _, ok := parsePatchHeader(line)
 	return ok
+}
+
+// parsePatchHunkAnchor returns the optional text following @@. A structured
+// patch commonly uses a heading (for example, "@@ # Tools") as an anchor.
+// Keep conventional line-number hunk headers as metadata so accepting one
+// does not unexpectedly narrow the search range.
+func parsePatchHunkAnchor(header string) string {
+	anchor := strings.TrimSpace(strings.TrimPrefix(header, "@@"))
+	if anchor == "" || isUnifiedHunkRange(anchor) || !isMarkdownHeading(anchor) {
+		return ""
+	}
+	return anchor
+}
+
+func isUnifiedHunkRange(header string) bool {
+	fields := strings.Fields(header)
+	if len(fields) < 2 || !isHunkRange(fields[0], '-') || !isHunkRange(fields[1], '+') {
+		return false
+	}
+	return len(fields) == 2 || (len(fields) >= 3 && fields[2] == "@@")
+}
+
+func isHunkRange(value string, prefix byte) bool {
+	if len(value) < 2 || value[0] != prefix {
+		return false
+	}
+	value = value[1:]
+	commaSeen := false
+	for i := 0; i < len(value); i++ {
+		if value[i] == ',' && !commaSeen {
+			commaSeen = true
+			if i == 0 || i == len(value)-1 {
+				return false
+			}
+			continue
+		}
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // validateAddedFileLine rejects common signs that a patch body was truncated
@@ -393,8 +435,34 @@ func applyPatchHunks(path string, content []byte, hunks []patchHunk) ([]byte, er
 		if len(oldLines) == 0 {
 			return nil, fmt.Errorf("update %q hunk %d: insertion requires context", path, hunkIndex+1)
 		}
+		contextStart := searchFrom
+		contextEnd := len(lines)
+		if hunk.anchor != "" {
+			anchorLine, anchorEnd, err := findPatchAnchor(lines, hunk.anchor, searchFrom)
+			if err != nil {
+				return nil, fmt.Errorf("update %q hunk %d: %w", path, hunkIndex+1, err)
+			}
+			// The anchor names the section containing the hunk; hunk lines
+			// describe content after the heading, not the heading itself.
+			anchorContentStart := anchorLine + 1
+			if len(oldLines) > 0 && oldLines[0] == hunk.anchor {
+				anchorContentStart = anchorLine
+			}
+			if anchorContentStart > contextStart {
+				contextStart = anchorContentStart
+			}
+			if anchorEnd < contextEnd {
+				contextEnd = anchorEnd
+			}
+			// A trailing heading is useful context for a change at the end of
+			// a section. Permit that one boundary line without allowing the
+			// hunk to search through the following section.
+			if contextEnd < len(lines) && len(oldLines) > 0 && lines[contextEnd] == oldLines[len(oldLines)-1] {
+				contextEnd++
+			}
+		}
 		match := -1
-		for i := searchFrom; i+len(oldLines) <= len(lines); i++ {
+		for i := contextStart; i+len(oldLines) <= contextEnd; i++ {
 			if equalLines(lines[i:i+len(oldLines)], oldLines) {
 				if match >= 0 {
 					return nil, fmt.Errorf("update %q hunk %d: context is ambiguous", path, hunkIndex+1)
@@ -403,7 +471,7 @@ func applyPatchHunks(path string, content []byte, hunks []patchHunk) ([]byte, er
 			}
 		}
 		if match < 0 {
-			return nil, fmt.Errorf("update %q hunk %d: context did not match", path, hunkIndex+1)
+			return nil, contextMismatchError(path, hunkIndex, lines, oldLines, contextStart, contextEnd)
 		}
 		updated := make([]string, 0, len(lines)-len(oldLines)+len(newLines))
 		updated = append(updated, lines[:match]...)
@@ -420,6 +488,76 @@ func applyPatchHunks(path string, content []byte, hunks []patchHunk) ([]byte, er
 		result = strings.ReplaceAll(result, "\n", newline)
 	}
 	return []byte(result), nil
+}
+
+func findPatchAnchor(lines []string, anchor string, searchFrom int) (int, int, error) {
+	for i := searchFrom; i < len(lines); i++ {
+		if lines[i] == anchor {
+			return i, patchAnchorEnd(lines, anchor, i), nil
+		}
+	}
+	// A later hunk may use the same section anchor after an earlier hunk has
+	// already moved the search position past the heading.
+	for i := searchFrom - 1; i >= 0; i-- {
+		if lines[i] == anchor {
+			return i, patchAnchorEnd(lines, anchor, i), nil
+		}
+	}
+	return -1, -1, fmt.Errorf("anchor %q did not match", anchor)
+}
+
+func patchAnchorEnd(lines []string, anchor string, anchorLine int) int {
+	if !isMarkdownHeading(anchor) {
+		return len(lines)
+	}
+	for i := anchorLine + 1; i < len(lines); i++ {
+		if isMarkdownHeading(lines[i]) {
+			return i
+		}
+	}
+	return len(lines)
+}
+
+func isMarkdownHeading(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) == 0 || trimmed[0] != '#' {
+		return false
+	}
+	return len(trimmed) == 1 || trimmed[1] == '#' || trimmed[1] == ' ' || trimmed[1] == '\t'
+}
+
+func contextMismatchError(path string, hunkIndex int, lines, expected []string, searchFrom, searchEnd int) error {
+	start := nearestContextStart(lines, expected, searchFrom, searchEnd)
+	for offset, want := range expected {
+		lineNumber := start + offset + 1
+		if start+offset >= len(lines) {
+			return fmt.Errorf("update %q hunk %d: context did not match; file ended at line %d, expected %q", path, hunkIndex+1, len(lines), want)
+		}
+		if lines[start+offset] != want {
+			return fmt.Errorf("update %q hunk %d: context did not match; line %d is %q, expected %q", path, hunkIndex+1, lineNumber, lines[start+offset], want)
+		}
+	}
+	return fmt.Errorf("update %q hunk %d: context did not match", path, hunkIndex+1)
+}
+
+func nearestContextStart(lines, expected []string, searchFrom, searchEnd int) int {
+	maxStart := searchEnd - len(expected)
+	if maxStart < searchFrom {
+		maxStart = searchFrom
+	}
+	bestStart, bestMatches := searchFrom, -1
+	for start := searchFrom; start <= maxStart; start++ {
+		matches := 0
+		for offset, want := range expected {
+			if start+offset < len(lines) && lines[start+offset] == want {
+				matches++
+			}
+		}
+		if matches > bestMatches {
+			bestStart, bestMatches = start, matches
+		}
+	}
+	return bestStart
 }
 
 func equalLines(a, b []string) bool {
