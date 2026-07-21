@@ -24,6 +24,7 @@ type linuxLineEditor struct {
 	history         []string
 	renderCursorRow int
 	renderEndRow    int
+	renderGhost     bool
 }
 
 func newPlatformLineEditor(in io.Reader, out io.Writer) lineEditor {
@@ -94,14 +95,19 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 	current := editableLine{}
 	e.renderCursorRow = 0
 	e.renderEndRow = 0
+	e.renderGhost = false
 	historyIndex := len(e.history)
 	draft := ""
+	completion := pathCompletionState{}
 	fmt.Fprint(e.out, prompt)
 
 	for {
 		value, readErr := e.readByte(ctx, 0)
 		if readErr != nil {
 			return "", readErr
+		}
+		if value != '\t' {
+			completion.reset()
 		}
 		switch value {
 		case '\r':
@@ -122,12 +128,8 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 			}
 			return line, nil
 		case '\t': // Tab completes a file or directory path.
-			start, replacement, matches := completePath(&current)
-			if replacement != "" {
-				current.replace(start, current.cursor, replacement)
+			if cyclePathCompletion(&current, &completion) {
 				e.redraw(prompt, &current)
-			} else if len(matches) > 1 {
-				e.showCompletions(prompt, &current, matches)
 			}
 		case 3: // Ctrl-C
 			e.finishLine("^C")
@@ -220,14 +222,6 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 	}
 }
 
-func (e *linuxLineEditor) showCompletions(prompt string, line *editableLine, matches []string) {
-	e.finishLine("")
-	for _, match := range matches {
-		fmt.Fprintf(e.out, "  %s\n", match)
-	}
-	e.redraw(prompt, line)
-}
-
 func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	columns := linuxTerminalColumns(e.outFD)
 	if columns <= 0 {
@@ -242,13 +236,19 @@ func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	// OPOST is disabled in raw mode, so a bare LF only moves the cursor down one
 	// row without returning to column 0. Emit CR before every embedded newline so
 	// continuation lines render flush left and match the column-0 cursor model.
+	ghost := pathGhostCompletion(line)
+	displayValue := append([]rune(nil), line.text...)
+	displayValue = append(displayValue, []rune(ghost)...)
 	display := strings.ReplaceAll(line.String(), "\n", "\r\n")
+	if ghost != "" {
+		display += ansiDim + ghost + ansiReset
+	}
 	fmt.Fprintf(e.out, "\033[J%s%s", prompt, display)
 
 	promptWidth := ansiDisplayWidth(prompt)
 	// Continuation lines start at column 0 (flush left); the terminal wraps long
 	// lines on its own, so soft wraps and explicit newlines both align at col 0.
-	endRow := multilineEndRow(promptWidth, line.text, 0, columns)
+	endRow := multilineEndRow(promptWidth, displayValue, 0, columns)
 	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 0, columns)
 
 	// Position from the rendered end because leftward cursor movement does not cross rows consistently.
@@ -261,15 +261,23 @@ func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
 	}
 	e.renderCursorRow = cursorRow
 	e.renderEndRow = endRow
+	e.renderGhost = ghost != ""
 }
 
 func (e *linuxLineEditor) finishLine(suffix string) {
+	if e.renderGhost {
+		fmt.Fprint(e.out, "\033[K")
+	}
 	if e.renderEndRow > e.renderCursorRow {
 		fmt.Fprintf(e.out, "\033[%dB", e.renderEndRow-e.renderCursorRow)
+		if e.renderGhost {
+			fmt.Fprint(e.out, "\033[J")
+		}
 	}
 	fmt.Fprintf(e.out, "\r%s\r\n", suffix)
 	e.renderCursorRow = 0
 	e.renderEndRow = 0
+	e.renderGhost = false
 }
 
 type linuxWinsize struct {

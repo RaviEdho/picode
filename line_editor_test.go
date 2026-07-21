@@ -26,7 +26,7 @@ func TestAnsiDisplayWidth(t *testing.T) {
 		"abc":                    3,
 		"\033[1mabc\033[0m":      3,
 		"\033[38;5;81mxy\033[0m": 2,
-		"日本語":                     3,
+		"日本語":                    3,
 	}
 	for input, want := range cases {
 		if got := ansiDisplayWidth(input); got != want {
@@ -89,5 +89,31 @@ func TestEditableLineExtent(t *testing.T) {
 	start, end, index := line.lineExtent()
 	if start != 3 || end != 7 || index != 1 {
 		t.Errorf("lineExtent=(%d,%d,%d) want (3,7,1)", start, end, index)
+	}
+}
+
+func TestCyclePathCompletion(t *testing.T) {
+	line := &editableLine{text: []rune("@ui"), cursor: 3}
+	state := pathCompletionState{}
+
+	for _, want := range []string{"@ui_plain.go", "@ui.go", "@ui_plain.go"} {
+		if !cyclePathCompletion(line, &state) {
+			t.Fatal("cyclePathCompletion reported no change")
+		}
+		if got := line.String(); got != want {
+			t.Errorf("completion=%q want %q", got, want)
+		}
+	}
+}
+
+func TestPathGhostCompletion(t *testing.T) {
+	line := &editableLine{text: []rune("@"), cursor: 1}
+	if got := pathGhostCompletion(line); got != "" {
+		t.Errorf("ghost for @=%q want empty", got)
+	}
+
+	line = &editableLine{text: []rune("@u"), cursor: 2}
+	if got := pathGhostCompletion(line); got != "i_plain.go" {
+		t.Errorf("ghost=%q want %q", got, "i_plain.go")
 	}
 }
