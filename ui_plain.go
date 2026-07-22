@@ -42,22 +42,44 @@ type PlainUI struct {
 	out io.Writer
 	err io.Writer
 
-	// mu serializes event rendering with status animation output.
-	mu sync.Mutex
+	// renderOut routes controller and line-editor output through renderLoop.
+	// renderLoop is the only goroutine that writes to out while Run is active.
+	renderOut io.Writer
+	renderCh  chan renderCommand
+	renderWG  sync.WaitGroup
+	renderMu  sync.Mutex
+	rendering bool
 
 	statusUpdate  func(string)
 	statusStop    func()
+	statusID      uint64
 	textOpen      bool
 	markdownLive  streamingMarkdown
 	toolOpen      bool
 	activeTools   int
 	printedTools  map[int]bool
 	printedCmdLen map[int]int
+
+	inputOpen      bool
+	inputPrompt    string
+	inputLine      editableLine
+	inputGhostText string
+	inputColumns   int
+	inputCursorRow int
+	inputEndRow    int
+	inputGhost     bool
 }
 
 // NewPlainUI creates a frontend around injectable terminal streams.
 func NewPlainUI(in io.Reader, out, errOut io.Writer) *PlainUI {
-	return &PlainUI{in: in, out: out, err: errOut}
+	ui := &PlainUI{
+		in:       in,
+		out:      out,
+		err:      errOut,
+		renderCh: make(chan renderCommand, 256),
+	}
+	ui.renderOut = plainUIRenderWriter{ui: ui}
+	return ui
 }
 
 // Warning writes a startup diagnostic to stderr.
@@ -69,6 +91,13 @@ func (ui *PlainUI) Warning(message string) {
 func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	ui.startRenderer()
+	defer func() {
+		ui.clearInput()
+		ui.printSummary(session.Usage(), session.SessionID(), len(session.History()) > 0)
+		ui.flushRenderer()
+		ui.stopRenderer()
+	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -89,6 +118,8 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 	}()
 
 	// Use platform line editing for terminals and scanner input for pipes, files, and tests.
+	// The editor uses the original output only for terminal detection and size;
+	// all of its rendering is delegated back to PlainUI.
 	editor := newPlatformLineEditor(ui.in, ui.out)
 	var scannedInput <-chan inputResult
 	if editor == nil {
@@ -110,9 +141,12 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 		}()
 	}
 
-	fmt.Fprintf(ui.out, "picode [%s] — type 'exit' or Ctrl-D to quit\n", session.SessionID())
+	fmt.Fprintf(ui.renderOut, "picode [%s] — type 'exit' or Ctrl-D to quit\n", session.SessionID())
 	ui.printHistory(session.History())
-	defer func() { ui.printSummary(session.Usage(), session.SessionID(), len(session.History()) > 0) }()
+	// History must reach the terminal before the editor enables raw mode. In raw
+	// mode OPOST is disabled, so queued newlines would not return to column zero
+	// and a resumed transcript would render diagonally or overwrite itself.
+	ui.flushRenderer()
 	for {
 		input := scannedInput
 		if editor != nil {
@@ -120,10 +154,10 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 			input = result
 			go func() {
 				prompt := colorCyan + "you>" + colorReset + " "
-				result <- editorInput(ctx, editor, prompt)
+				result <- editorInput(ctx, editor, prompt, ui)
 			}()
 		} else {
-			fmt.Fprintf(ui.out, "%syou>%s ", colorCyan, colorReset)
+			fmt.Fprintf(ui.renderOut, "%syou>%s ", colorCyan, colorReset)
 		}
 		select {
 		case <-ctx.Done():
@@ -149,7 +183,12 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 			if text == "exit" || text == "quit" {
 				return nil
 			}
-			if err := session.RunTurn(ctx, text, ui); err != nil {
+			err := session.RunTurn(ctx, text, ui)
+			// RunTurn emits its final stream event before returning, but Emit is
+			// asynchronous. Drain those transcript commands before the next editor
+			// instance enables raw mode for another prompt.
+			ui.flushRenderer()
+			if err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
@@ -159,17 +198,24 @@ func (ui *PlainUI) Run(ctx context.Context, session Conversation) error {
 	}
 }
 
-// Emit renders one semantic UI event.
+// Emit queues one semantic UI event. renderLoop is its sole renderer.
 func (ui *PlainUI) Emit(event UIEvent) {
-	ui.mu.Lock()
-	defer ui.mu.Unlock()
+	ui.renderMu.Lock()
+	if ui.rendering {
+		ui.renderCh <- eventRenderCommand{event: event}
+	}
+	ui.renderMu.Unlock()
+}
 
+// renderEvent runs only in renderLoop.
+func (ui *PlainUI) renderEvent(event UIEvent) {
 	// Each event updates only its related renderer state.
 	switch event := event.(type) {
 	case StatusEvent:
 		if ui.statusStop == nil {
 			ui.resetResponseState()
-			ui.statusUpdate, ui.statusStop = ui.animateStatus(string(event.Phase))
+			ui.statusID++
+			ui.statusUpdate, ui.statusStop = ui.animateStatus(string(event.Phase), ui.statusID)
 		} else {
 			ui.statusUpdate(string(event.Phase))
 		}
@@ -231,7 +277,8 @@ func (ui *PlainUI) Emit(event UIEvent) {
 		} else {
 			ui.activeTools++
 			if ui.statusStop == nil {
-				ui.statusUpdate, ui.statusStop = ui.animateStatus(fmt.Sprintf("running %d tools", ui.activeTools))
+				ui.statusID++
+				ui.statusUpdate, ui.statusStop = ui.animateStatus(fmt.Sprintf("running %d tools", ui.activeTools), ui.statusID)
 			} else if ui.statusUpdate != nil {
 				ui.statusUpdate(fmt.Sprintf("running %d tools", ui.activeTools))
 			}
@@ -239,6 +286,270 @@ func (ui *PlainUI) Emit(event UIEvent) {
 	case EmptyResponseEvent:
 		fmt.Fprintln(ui.out, "(empty response)")
 	}
+}
+
+type renderCommand interface{ isRenderCommand() }
+
+type eventRenderCommand struct{ event UIEvent }
+type writeRenderCommand struct {
+	text []byte
+	done chan struct{}
+}
+type statusRenderCommand struct {
+	id     uint64
+	status string
+	phase  int
+}
+type drawInputRenderCommand struct {
+	prompt  string
+	line    editableLine
+	ghost   string
+	columns int
+	done    chan struct{}
+}
+type finishInputRenderCommand struct {
+	suffix string
+	done   chan struct{}
+}
+type clearInputRenderCommand struct{ done chan struct{} }
+type flushRenderCommand struct{ done chan struct{} }
+type stopRenderCommand struct{ done chan struct{} }
+
+func (eventRenderCommand) isRenderCommand()       {}
+func (writeRenderCommand) isRenderCommand()       {}
+func (statusRenderCommand) isRenderCommand()      {}
+func (drawInputRenderCommand) isRenderCommand()   {}
+func (finishInputRenderCommand) isRenderCommand() {}
+func (clearInputRenderCommand) isRenderCommand()  {}
+func (flushRenderCommand) isRenderCommand()       {}
+func (stopRenderCommand) isRenderCommand()        {}
+
+// plainUIRenderWriter makes existing fmt-based callers renderer-safe.
+type plainUIRenderWriter struct{ ui *PlainUI }
+
+func (w plainUIRenderWriter) Write(text []byte) (int, error) {
+	copyText := append([]byte(nil), text...)
+	w.ui.renderMu.Lock()
+	if !w.ui.rendering {
+		w.ui.renderMu.Unlock()
+		return w.ui.out.Write(copyText)
+	}
+	w.ui.renderCh <- writeRenderCommand{text: copyText}
+	w.ui.renderMu.Unlock()
+	return len(text), nil
+}
+
+func (ui *PlainUI) startRenderer() {
+	ui.renderMu.Lock()
+	if ui.rendering {
+		ui.renderMu.Unlock()
+		return
+	}
+	ui.rendering = true
+	ui.renderWG.Add(1)
+	ui.renderMu.Unlock()
+	go ui.renderLoop()
+}
+
+// renderLoop is the sole writer to ui.out during Run.
+func (ui *PlainUI) renderLoop() {
+	defer ui.renderWG.Done()
+	for command := range ui.renderCh {
+		switch command := command.(type) {
+		case eventRenderCommand:
+			ui.renderTranscript(func() { ui.renderEvent(command.event) })
+		case writeRenderCommand:
+			ui.renderTranscript(func() { _, _ = ui.out.Write(command.text) })
+			if command.done != nil {
+				close(command.done)
+			}
+		case statusRenderCommand:
+			if command.id == ui.statusID && ui.statusStop != nil {
+				ui.renderTranscript(func() { writeStatus(ui.out, command.status, command.phase) })
+			}
+		case drawInputRenderCommand:
+			ui.drawInput(command.prompt, command.line, command.ghost, command.columns)
+			close(command.done)
+		case finishInputRenderCommand:
+			ui.finishInput(command.suffix)
+			close(command.done)
+		case clearInputRenderCommand:
+			ui.clearRenderedInput()
+			close(command.done)
+		case flushRenderCommand:
+			close(command.done)
+		case stopRenderCommand:
+			ui.stopStatus()
+			close(command.done)
+			return
+		}
+	}
+}
+
+// WriteTerminal implements terminalInputRenderer for terminal protocol setup.
+func (ui *PlainUI) WriteTerminal(text string) { ui.writeRenderer(text) }
+
+// DrawInput implements terminalInputRenderer. It waits until the complete
+// redraw is committed before the editor reads the next key.
+func (ui *PlainUI) DrawInput(prompt string, line editableLine, ghost string, columns int) {
+	done := make(chan struct{})
+	if !ui.sendRendererCommand(drawInputRenderCommand{
+		prompt: prompt, line: editableLine{text: append([]rune(nil), line.text...), cursor: line.cursor},
+		ghost: ghost, columns: columns, done: done,
+	}) {
+		return
+	}
+	<-done
+}
+
+// FinishInput implements terminalInputRenderer.
+func (ui *PlainUI) FinishInput(suffix string) {
+	done := make(chan struct{})
+	if !ui.sendRendererCommand(finishInputRenderCommand{suffix: suffix, done: done}) {
+		return
+	}
+	<-done
+}
+
+func (ui *PlainUI) clearInput() {
+	done := make(chan struct{})
+	if !ui.sendRendererCommand(clearInputRenderCommand{done: done}) {
+		return
+	}
+	<-done
+}
+
+func (ui *PlainUI) writeRenderer(text string) {
+	done := make(chan struct{})
+	if !ui.sendRendererCommand(writeRenderCommand{text: []byte(text), done: done}) {
+		return
+	}
+	<-done
+}
+
+func (ui *PlainUI) sendRendererCommand(command renderCommand) bool {
+	ui.renderMu.Lock()
+	defer ui.renderMu.Unlock()
+	if ui.rendering {
+		ui.renderCh <- command
+		return true
+	}
+	return false
+}
+
+// drawInput runs in renderLoop and owns prompt, input, and cursor layout.
+func (ui *PlainUI) drawInput(prompt string, line editableLine, ghost string, columns int) {
+	if columns <= 0 {
+		columns = 80
+	}
+	fmt.Fprint(ui.out, "\r")
+	if ui.inputOpen && ui.inputCursorRow > 0 {
+		fmt.Fprintf(ui.out, "\033[%dA", ui.inputCursorRow)
+	}
+	displayValue := append([]rune(nil), line.text...)
+	displayValue = append(displayValue, []rune(ghost)...)
+	display := strings.ReplaceAll(line.String(), "\n", "\r\n")
+	if ghost != "" {
+		display += ansiDim + ghost + ansiReset
+	}
+	fmt.Fprintf(ui.out, "\033[J%s%s", prompt, display)
+	promptWidth := ansiDisplayWidth(prompt)
+	endRow := multilineEndRow(promptWidth, displayValue, 0, columns)
+	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 0, columns)
+	fmt.Fprint(ui.out, "\r")
+	if endRow > cursorRow {
+		fmt.Fprintf(ui.out, "\033[%dA", endRow-cursorRow)
+	}
+	if cursorColumn > 0 {
+		fmt.Fprintf(ui.out, "\033[%dC", cursorColumn)
+	}
+	ui.inputOpen = true
+	ui.inputPrompt = prompt
+	ui.inputLine = editableLine{text: append([]rune(nil), line.text...), cursor: line.cursor}
+	ui.inputGhostText = ghost
+	ui.inputColumns = columns
+	ui.inputCursorRow, ui.inputEndRow = cursorRow, endRow
+	ui.inputGhost = ghost != ""
+}
+
+func (ui *PlainUI) finishInput(suffix string) {
+	if !ui.inputOpen {
+		return
+	}
+	if ui.inputGhost {
+		fmt.Fprint(ui.out, "\033[K")
+	}
+	if ui.inputEndRow > ui.inputCursorRow {
+		fmt.Fprintf(ui.out, "\033[%dB", ui.inputEndRow-ui.inputCursorRow)
+		if ui.inputGhost {
+			fmt.Fprint(ui.out, "\033[J")
+		}
+	}
+	fmt.Fprintf(ui.out, "\r%s\r\n", suffix)
+	ui.inputOpen = false
+	ui.inputPrompt = ""
+	ui.inputLine = editableLine{}
+	ui.inputGhostText = ""
+	ui.inputColumns = 0
+	ui.inputCursorRow, ui.inputEndRow = 0, 0
+	ui.inputGhost = false
+}
+
+// renderTranscript temporarily removes the active input region before writing
+// asynchronous transcript or status output, then restores it below the new
+// content. This keeps late stream events from overwriting a typed draft.
+func (ui *PlainUI) renderTranscript(write func()) {
+	if !ui.inputOpen {
+		write()
+		return
+	}
+	prompt, line := ui.inputPrompt, ui.inputLine
+	ghost, columns := ui.inputGhostText, ui.inputColumns
+	ui.clearRenderedInput()
+	write()
+	ui.drawInput(prompt, line, ghost, columns)
+}
+
+func (ui *PlainUI) clearRenderedInput() {
+	if !ui.inputOpen {
+		return
+	}
+	fmt.Fprint(ui.out, "\r")
+	if ui.inputCursorRow > 0 {
+		fmt.Fprintf(ui.out, "\033[%dA", ui.inputCursorRow)
+	}
+	fmt.Fprint(ui.out, "\033[J")
+	ui.inputOpen = false
+	ui.inputCursorRow, ui.inputEndRow = 0, 0
+	ui.inputGhost = false
+}
+
+func (ui *PlainUI) flushRenderer() {
+	ui.renderMu.Lock()
+	defer ui.renderMu.Unlock()
+	if !ui.rendering {
+		return
+	}
+	done := make(chan struct{})
+	ui.renderCh <- flushRenderCommand{done: done}
+	<-done
+}
+
+func (ui *PlainUI) stopRenderer() {
+	// Keep rendering marked active until the stop command has drained all
+	// earlier commands. This prevents a concurrent Emit or renderOut.Write from
+	// enqueueing behind stop after renderLoop has exited.
+	ui.renderMu.Lock()
+	if !ui.rendering {
+		ui.renderMu.Unlock()
+		return
+	}
+	done := make(chan struct{})
+	ui.renderCh <- stopRenderCommand{done: done}
+	<-done
+	ui.renderWG.Wait()
+	ui.rendering = false
+	ui.renderMu.Unlock()
 }
 
 // resetResponseState prepares tracking for a new model stream.
@@ -259,7 +570,7 @@ func (ui *PlainUI) stopStatus() {
 }
 
 // animateStatus sweeps the response status until its stop function is called.
-func (ui *PlainUI) animateStatus(initial string) (update func(string), stop func()) {
+func (ui *PlainUI) animateStatus(initial string, id uint64) (update func(string), stop func()) {
 	done := make(chan struct{})
 	var once sync.Once
 	var statusMu sync.Mutex
@@ -292,7 +603,10 @@ func (ui *PlainUI) animateStatus(initial string) (update func(string), stop func
 			} else if phase < cycle-1 {
 				phase++
 			}
-			writeStatus(ui.out, status, phase)
+			select {
+			case ui.renderCh <- statusRenderCommand{id: id, status: status, phase: phase}:
+			default:
+			}
 			statusMu.Unlock()
 		}
 	}()
@@ -343,20 +657,20 @@ func (ui *PlainUI) printHistory(messages []Message) {
 	for _, message := range messages {
 		switch message.Role {
 		case "user":
-			fmt.Fprintf(ui.out, "%syou>%s %s\n", colorCyan, colorReset, message.Content)
+			fmt.Fprintf(ui.renderOut, "%syou>%s %s\n", colorCyan, colorReset, message.Content)
 		case "assistant":
 			if message.Content != "" {
-				fmt.Fprintf(ui.out, "%spicode>%s ", colorGreen, colorReset)
-				renderMarkdown(ui.out, message.Content)
+				fmt.Fprintf(ui.renderOut, "%spicode>%s ", colorGreen, colorReset)
+				renderMarkdown(ui.renderOut, message.Content)
 			}
 			for _, call := range message.ToolCalls {
-				fmt.Fprintf(ui.out, "%s%s>%s %s\n", colorYellow, call.Function.Name, colorReset,
+				fmt.Fprintf(ui.renderOut, "%s%s>%s %s\n", colorYellow, call.Function.Name, colorReset,
 					displayToolInput(call.Function.Name, call.Function.Arguments))
 			}
 		case "tool":
-			fmt.Fprintf(ui.out, "%s   output>%s ", colorYellow, colorReset)
-			printTruncated(ui.out, message.Content, 5, colorFaded)
-			fmt.Fprintln(ui.out)
+			fmt.Fprintf(ui.renderOut, "%s   output>%s ", colorYellow, colorReset)
+			printTruncated(ui.renderOut, message.Content, 5, colorFaded)
+			fmt.Fprintln(ui.renderOut)
 		}
 	}
 }
@@ -365,23 +679,23 @@ func (ui *PlainUI) printHistory(messages []Message) {
 func (ui *PlainUI) printSummary(usage UsageTotals, sessionID string, resumable bool) {
 	tokensAvailable := usage.Total() > 0 || (usage.Cost != nil && *usage.Cost > 0)
 	if tokensAvailable {
-		fmt.Fprintf(ui.out, "\n%s session ended%s - %s%d%s tokens total, %s%d%s sent (+%s%d%s cached), %s%d%s received",
+		fmt.Fprintf(ui.renderOut, "\n%s session ended%s - %s%d%s tokens total, %s%d%s sent (+%s%d%s cached), %s%d%s received",
 			ansiBlue, colorReset,
 			ansiYellow, usage.Total(), colorReset,
 			ansiCyan, usage.Prompt-usage.Cached, colorReset,
 			colorFaded, usage.Cached, colorReset,
 			ansiGreen, usage.Completion, colorReset)
 		if usage.Cost != nil {
-			fmt.Fprintf(ui.out, ", %s$%.6f%s cost", ansiMagenta, *usage.Cost, colorReset)
+			fmt.Fprintf(ui.renderOut, ", %s$%.6f%s cost", ansiMagenta, *usage.Cost, colorReset)
 		}
 	} else {
-		fmt.Fprintf(ui.out, "\n%s session ended%s", ansiBlue, colorReset)
+		fmt.Fprintf(ui.renderOut, "\n%s session ended%s", ansiBlue, colorReset)
 	}
-	fmt.Fprintln(ui.out)
+	fmt.Fprintln(ui.renderOut)
 	if resumable {
-		fmt.Fprintf(ui.out, "resume session with %spicode -resume %s%s\n", colorFaded, sessionID, colorReset)
+		fmt.Fprintf(ui.renderOut, "resume session with %spicode -resume %s%s\n", colorFaded, sessionID, colorReset)
 	}
-	fmt.Fprintln(ui.out)
+	fmt.Fprintln(ui.renderOut)
 }
 
 // printTruncated limits command output shown in the transcript.

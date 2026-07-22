@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -18,22 +17,18 @@ import (
 const escapeReadTimeout = 30 * time.Millisecond
 
 type linuxLineEditor struct {
-	in              *os.File
-	out             io.Writer
-	outFD           uintptr
-	history         []string
-	renderCursorRow int
-	renderEndRow    int
-	renderGhost     bool
+	in      *os.File
+	outFD   uintptr
+	history []string
 }
 
-func newPlatformLineEditor(in io.Reader, out io.Writer) lineEditor {
+func newPlatformLineEditor(in io.Reader, terminalOut io.Writer) lineEditor {
 	input, inputOK := in.(*os.File)
-	output, outputOK := out.(*os.File)
+	output, outputOK := terminalOut.(*os.File)
 	if !inputOK || !outputOK || !isLinuxTerminal(input.Fd()) || !isLinuxTerminal(output.Fd()) {
 		return nil
 	}
-	return &linuxLineEditor{in: input, out: out, outFD: output.Fd()}
+	return &linuxLineEditor{in: input, outFD: output.Fd()}
 }
 
 func isLinuxTerminal(fd uintptr) bool {
@@ -71,7 +66,7 @@ func rawLinuxTermios(termios syscall.Termios) syscall.Termios {
 	return termios
 }
 
-func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line string, err error) {
+func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string, renderer terminalInputRenderer) (line string, err error) {
 	fd := e.in.Fd()
 	original, err := getLinuxTermios(fd)
 	if err != nil {
@@ -84,22 +79,19 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 	// Ask terminals that support the kitty keyboard protocol to distinguish
 	// Shift+Enter from Enter. Older terminals ignore this private sequence and
 	// continue to use their normal key encoding.
-	fmt.Fprint(e.out, "\033[>1u")
+	renderer.WriteTerminal("\033[>1u")
 	defer func() {
-		fmt.Fprint(e.out, "\033[<u")
+		renderer.WriteTerminal("\033[<u")
 		if restoreErr := setLinuxTermios(fd, &original); err == nil && restoreErr != nil {
 			err = fmt.Errorf("restore terminal settings: %w", restoreErr)
 		}
 	}()
 
 	current := editableLine{}
-	e.renderCursorRow = 0
-	e.renderEndRow = 0
-	e.renderGhost = false
 	historyIndex := len(e.history)
 	draft := ""
 	completion := pathCompletionState{}
-	fmt.Fprint(e.out, prompt)
+	renderer.DrawInput(prompt, current, pathGhostCompletion(&current), linuxTerminalColumns(e.outFD))
 
 	for {
 		value, readErr := e.readByte(ctx, 0)
@@ -113,7 +105,7 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 		case '\r':
 			// Terminals commonly encode Enter as CR.  Shift+Enter is
 			// handled by the terminal's modified-key escape sequence below.
-			e.finishLine("")
+			renderer.FinishInput("")
 			line = current.String()
 			if line != "" && (len(e.history) == 0 || e.history[len(e.history)-1] != line) {
 				e.history = append(e.history, line)
@@ -121,7 +113,7 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 			return line, nil
 		case '\n':
 			// A bare LF is a normal submit key in raw mode.
-			e.finishLine("")
+			renderer.FinishInput("")
 			line = current.String()
 			if line != "" && (len(e.history) == 0 || e.history[len(e.history)-1] != line) {
 				e.history = append(e.history, line)
@@ -129,34 +121,34 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 			return line, nil
 		case '\t': // Tab completes a file or directory path.
 			if cyclePathCompletion(&current, &completion) {
-				e.redraw(prompt, &current)
+				e.redraw(prompt, &current, renderer)
 			}
 		case 3: // Ctrl-C
-			e.finishLine("^C")
+			renderer.FinishInput("^C")
 			return "", errInputInterrupt
 		case 4: // Ctrl-D deletes at the cursor, or exits on an empty line.
 			if len(current.text) == 0 {
-				e.finishLine("")
+				renderer.FinishInput("")
 				return "", io.EOF
 			}
 			current.delete()
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		case 1: // Ctrl-A
 			current.cursor = 0
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		case 5: // Ctrl-E
 			current.cursor = len(current.text)
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		case 11: // Ctrl-K
 			current.text = current.text[:current.cursor]
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		case 21: // Ctrl-U
 			current.text = current.text[current.cursor:]
 			current.cursor = 0
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		case 8, 127:
 			current.backspace()
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		case 27:
 			key, keyErr := e.readEscape(ctx)
 			if keyErr != nil && !errors.Is(keyErr, errEscapeTimeout) {
@@ -207,7 +199,7 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 					}
 				}
 			}
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		default:
 			if value < 32 {
 				continue
@@ -217,67 +209,13 @@ func (e *linuxLineEditor) ReadLine(ctx context.Context, prompt string) (line str
 				return "", runeErr
 			}
 			current.insert(r)
-			e.redraw(prompt, &current)
+			e.redraw(prompt, &current, renderer)
 		}
 	}
 }
 
-func (e *linuxLineEditor) redraw(prompt string, line *editableLine) {
-	columns := linuxTerminalColumns(e.outFD)
-	if columns <= 0 {
-		columns = 80
-	}
-
-	// Move to the first rendered row because a carriage return only reaches the current visual row.
-	fmt.Fprint(e.out, "\r")
-	if e.renderCursorRow > 0 {
-		fmt.Fprintf(e.out, "\033[%dA", e.renderCursorRow)
-	}
-	// OPOST is disabled in raw mode, so a bare LF only moves the cursor down one
-	// row without returning to column 0. Emit CR before every embedded newline so
-	// continuation lines render flush left and match the column-0 cursor model.
-	ghost := pathGhostCompletion(line)
-	displayValue := append([]rune(nil), line.text...)
-	displayValue = append(displayValue, []rune(ghost)...)
-	display := strings.ReplaceAll(line.String(), "\n", "\r\n")
-	if ghost != "" {
-		display += ansiDim + ghost + ansiReset
-	}
-	fmt.Fprintf(e.out, "\033[J%s%s", prompt, display)
-
-	promptWidth := ansiDisplayWidth(prompt)
-	// Continuation lines start at column 0 (flush left); the terminal wraps long
-	// lines on its own, so soft wraps and explicit newlines both align at col 0.
-	endRow := multilineEndRow(promptWidth, displayValue, 0, columns)
-	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 0, columns)
-
-	// Position from the rendered end because leftward cursor movement does not cross rows consistently.
-	fmt.Fprint(e.out, "\r")
-	if endRow > cursorRow {
-		fmt.Fprintf(e.out, "\033[%dA", endRow-cursorRow)
-	}
-	if cursorColumn > 0 {
-		fmt.Fprintf(e.out, "\033[%dC", cursorColumn)
-	}
-	e.renderCursorRow = cursorRow
-	e.renderEndRow = endRow
-	e.renderGhost = ghost != ""
-}
-
-func (e *linuxLineEditor) finishLine(suffix string) {
-	if e.renderGhost {
-		fmt.Fprint(e.out, "\033[K")
-	}
-	if e.renderEndRow > e.renderCursorRow {
-		fmt.Fprintf(e.out, "\033[%dB", e.renderEndRow-e.renderCursorRow)
-		if e.renderGhost {
-			fmt.Fprint(e.out, "\033[J")
-		}
-	}
-	fmt.Fprintf(e.out, "\r%s\r\n", suffix)
-	e.renderCursorRow = 0
-	e.renderEndRow = 0
-	e.renderGhost = false
+func (e *linuxLineEditor) redraw(prompt string, line *editableLine, renderer terminalInputRenderer) {
+	renderer.DrawInput(prompt, *line, pathGhostCompletion(line), linuxTerminalColumns(e.outFD))
 }
 
 type linuxWinsize struct {

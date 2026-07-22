@@ -15,7 +15,15 @@ var errInputInterrupt = errors.New("input interrupted")
 
 // lineEditor is the interactive input boundary; platform constructors return nil for non-terminal streams.
 type lineEditor interface {
-	ReadLine(context.Context, string) (string, error)
+	ReadLine(context.Context, string, terminalInputRenderer) (string, error)
+}
+
+// terminalInputRenderer owns all terminal writes while an editor reads keys.
+// Editors update editableLine; PlainUI draws its prompt, text, and cursor.
+type terminalInputRenderer interface {
+	WriteTerminal(string)
+	DrawInput(prompt string, line editableLine, ghost string, columns int)
+	FinishInput(suffix string)
 }
 
 type editableLine struct {
@@ -289,8 +297,8 @@ type inputResult struct {
 	err  error
 }
 
-func editorInput(ctx context.Context, editor lineEditor, prompt string) inputResult {
-	text, err := editor.ReadLine(ctx, prompt)
+func editorInput(ctx context.Context, editor lineEditor, prompt string, renderer terminalInputRenderer) inputResult {
+	text, err := editor.ReadLine(ctx, prompt, renderer)
 	switch {
 	case err == nil:
 		return inputResult{text: text, ok: true}

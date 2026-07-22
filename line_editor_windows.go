@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -40,12 +39,8 @@ var (
 
 type windowsLineEditor struct {
 	in                 syscall.Handle
-	out                io.Writer
 	outHandle          syscall.Handle
 	history            []string
-	renderCursorRow    int
-	renderEndRow       int
-	renderGhost        bool
 	originalMode       uint32
 	originalOutputMode uint32
 }
@@ -76,9 +71,9 @@ type windowsConsoleInfo struct {
 	MaximumWindowSize windowsCoord
 }
 
-func newPlatformLineEditor(in io.Reader, out io.Writer) lineEditor {
+func newPlatformLineEditor(in io.Reader, terminalOut io.Writer) lineEditor {
 	input, inputOK := in.(*os.File)
-	output, outputOK := out.(*os.File)
+	output, outputOK := terminalOut.(*os.File)
 	if !inputOK || !outputOK {
 		return nil
 	}
@@ -92,10 +87,10 @@ func newPlatformLineEditor(in io.Reader, out io.Writer) lineEditor {
 	if ok, _, _ := winGetConsoleMode.Call(uintptr(outHandle), uintptr(unsafe.Pointer(&outMode))); ok == 0 {
 		return nil
 	}
-	return &windowsLineEditor{in: inHandle, out: out, outHandle: outHandle, originalMode: mode, originalOutputMode: outMode}
+	return &windowsLineEditor{in: inHandle, outHandle: outHandle, originalMode: mode, originalOutputMode: outMode}
 }
 
-func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string, error) {
+func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string, renderer terminalInputRenderer) (string, error) {
 	mode := e.originalMode &^ (winEnableProcessed | winEnableLine | winEnableEcho | winEnableMouse | winEnableWindow)
 	if ok, _, err := winSetConsoleMode.Call(uintptr(e.in), uintptr(mode)); ok == 0 {
 		return "", fmt.Errorf("enable Windows console editing: %w", err)
@@ -108,11 +103,10 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 	defer winSetConsoleMode.Call(uintptr(e.outHandle), uintptr(e.originalOutputMode))
 
 	line := &editableLine{}
-	e.renderCursorRow, e.renderEndRow, e.renderGhost = 0, 0, false
 	historyIndex := len(e.history)
 	draft := ""
 	completion := pathCompletionState{}
-	fmt.Fprint(e.out, prompt)
+	renderer.DrawInput(prompt, *line, pathGhostCompletion(line), windowsTerminalColumns(e.outHandle))
 	for {
 		record, err := e.readRecord(ctx)
 		if err != nil {
@@ -126,26 +120,26 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 			completion.reset()
 		}
 		if key.ControlKeyState&(winLeftCtrl|winRightCtrl) != 0 && key.VirtualKeyCode == 'C' {
-			e.finishLine("^C")
+			renderer.FinishInput("^C")
 			return "", errInputInterrupt
 		}
 		if key.ControlKeyState&(winLeftCtrl|winRightCtrl) != 0 && key.VirtualKeyCode == 'D' {
 			if len(line.text) == 0 {
-				e.finishLine("")
+				renderer.FinishInput("")
 				return "", io.EOF
 			}
 			line.delete()
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 			continue
 		}
 		if key.VirtualKeyCode == 0x0D { // Enter.
 			altOrShift := key.ControlKeyState&(winControlKeyShift|winLeftAlt|winRightAlt) != 0
 			if altOrShift {
 				line.insert('\n')
-				e.redraw(prompt, line)
+				e.redraw(prompt, line, renderer)
 				continue
 			}
-			e.finishLine("")
+			renderer.FinishInput("")
 			value := line.String()
 			if value != "" && (len(e.history) == 0 || e.history[len(e.history)-1] != value) {
 				e.history = append(e.history, value)
@@ -155,33 +149,33 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 		switch key.VirtualKeyCode {
 		case 0x09: // Tab.
 			if cyclePathCompletion(line, &completion) {
-				e.redraw(prompt, line)
+				e.redraw(prompt, line, renderer)
 			}
 		case 0x08:
 			line.backspace()
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 		case 0x25:
 			if line.cursor > 0 {
 				line.cursor--
 			}
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 		case 0x27:
 			if line.cursor < len(line.text) {
 				line.cursor++
 			}
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 		case 0x24:
 			line.cursor = 0
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 		case 0x23:
 			line.cursor = len(line.text)
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 		case 0x2E:
 			line.delete()
-			e.redraw(prompt, line)
+			e.redraw(prompt, line, renderer)
 		case 0x26:
 			if line.moveUp() {
-				e.redraw(prompt, line)
+				e.redraw(prompt, line, renderer)
 				break
 			}
 			if historyIndex == len(e.history) {
@@ -190,11 +184,11 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 			if historyIndex > 0 {
 				historyIndex--
 				line.set(e.history[historyIndex])
-				e.redraw(prompt, line)
+				e.redraw(prompt, line, renderer)
 			}
 		case 0x28:
 			if line.moveDown() {
-				e.redraw(prompt, line)
+				e.redraw(prompt, line, renderer)
 				break
 			}
 			if historyIndex < len(e.history) {
@@ -204,14 +198,14 @@ func (e *windowsLineEditor) ReadLine(ctx context.Context, prompt string) (string
 				} else {
 					line.set(e.history[historyIndex])
 				}
-				e.redraw(prompt, line)
+				e.redraw(prompt, line, renderer)
 			}
 		default:
 			if key.UnicodeChar != 0 {
 				runes := utf16.Decode([]uint16{key.UnicodeChar})
 				if len(runes) > 0 && runes[0] >= 32 {
 					line.insert(runes[0])
-					e.redraw(prompt, line)
+					e.redraw(prompt, line, renderer)
 				}
 			}
 		}
@@ -245,53 +239,8 @@ func (e *windowsLineEditor) readRecord(ctx context.Context) (windowsInputRecord,
 	}
 }
 
-func (e *windowsLineEditor) redraw(prompt string, line *editableLine) {
-	columns := windowsTerminalColumns(e.outHandle)
-	if columns <= 0 {
-		columns = 80
-	}
-	fmt.Fprint(e.out, "\r")
-	if e.renderCursorRow > 0 {
-		fmt.Fprintf(e.out, "\033[%dA", e.renderCursorRow)
-	}
-	// The console writes a bare LF as a line down with no carriage return, so
-	// emit CR before each embedded newline to keep continuation lines flush left.
-	ghost := pathGhostCompletion(line)
-	displayValue := append([]rune(nil), line.text...)
-	displayValue = append(displayValue, []rune(ghost)...)
-	display := strings.ReplaceAll(line.String(), "\n", "\r\n")
-	if ghost != "" {
-		display += ansiDim + ghost + ansiReset
-	}
-	fmt.Fprintf(e.out, "\033[J%s%s", prompt, display)
-	promptWidth := ansiDisplayWidth(prompt)
-	// Continuation lines start at column 0 (flush left).
-	endRow := multilineEndRow(promptWidth, displayValue, 0, columns)
-	cursorRow, cursorColumn := multilineCursorPosition(promptWidth, line.text[:line.cursor], 0, columns)
-	fmt.Fprint(e.out, "\r")
-	if endRow > cursorRow {
-		fmt.Fprintf(e.out, "\033[%dA", endRow-cursorRow)
-	}
-	if cursorColumn > 0 {
-		fmt.Fprintf(e.out, "\033[%dC", cursorColumn)
-	}
-	e.renderCursorRow, e.renderEndRow = cursorRow, endRow
-	e.renderGhost = ghost != ""
-}
-
-func (e *windowsLineEditor) finishLine(suffix string) {
-	if e.renderGhost {
-		fmt.Fprint(e.out, "\033[K")
-	}
-	if e.renderEndRow > e.renderCursorRow {
-		fmt.Fprintf(e.out, "\033[%dB", e.renderEndRow-e.renderCursorRow)
-		if e.renderGhost {
-			fmt.Fprint(e.out, "\033[J")
-		}
-	}
-	fmt.Fprintf(e.out, "\r%s\r\n", suffix)
-	e.renderCursorRow, e.renderEndRow = 0, 0
-	e.renderGhost = false
+func (e *windowsLineEditor) redraw(prompt string, line *editableLine, renderer terminalInputRenderer) {
+	renderer.DrawInput(prompt, *line, pathGhostCompletion(line), windowsTerminalColumns(e.outHandle))
 }
 
 func windowsTerminalColumns(handle syscall.Handle) int {

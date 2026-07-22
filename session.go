@@ -135,6 +135,14 @@ func (s *Session) Snapshot() SessionSnapshot {
 	return SessionSnapshot{Messages: cloneMessages(s.history), Usage: s.Usage()}
 }
 
+// RetainInput restores a checkpointed user message after RunTurn rolled back an
+// incomplete turn. PersistentConversation calls this only after its durable
+// checkpoint has succeeded, keeping in-memory and on-disk history aligned for
+// a later turn in the same process.
+func (s *Session) RetainInput(input string) {
+	s.history = append(s.history, Message{Role: "user", Content: input})
+}
+
 func cloneMessages(messages []Message) []Message {
 	cloned := make([]Message, len(messages))
 	copy(cloned, messages)

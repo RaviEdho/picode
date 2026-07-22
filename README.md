@@ -2,6 +2,8 @@
 
 Short, dependency-free CLI chat for local LLMs using an OpenAI-compatible `/v1/chat/completions` server.
 
+Terminal UI architecture: [`docs/terminal-ui.md`](docs/terminal-ui.md).
+
 ## Install
 
 ```bash
@@ -66,6 +68,8 @@ go run .
 ## Sessions
 
 Sessions are saved under `~/.picode/sessions/`, scoped to the working directory, and never store credentials.
+The submitted prompt is checkpointed before a response starts, so a crash or
+network failure leaves it available when the session is resumed.
 
 ```bash
 picode -resume
