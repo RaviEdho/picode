@@ -104,6 +104,21 @@ func TestStreamAssistantPreservesToolArgumentsWithMultipleBackticks(t *testing.T
 	}
 }
 
+func TestStreamAssistantRejectsNegativeToolCallIndex(t *testing.T) {
+	stream := &StreamReader{single: &ChatCompletionChunk{
+		Choices: []ChunkChoice{{
+			Delta: Delta{ToolCalls: []ToolCallDelta{{
+				Index: -1,
+			}}},
+		}},
+	}}
+
+	_, _, _, err := streamAssistant(context.Background(), testChatStreamer{stream: stream}, nil, discardEventSink{})
+	if err == nil || !strings.Contains(err.Error(), "invalid tool-call index -1") {
+		t.Fatalf("error = %v, want invalid negative tool-call index", err)
+	}
+}
+
 func toolArgumentChunk(role, id, name, arguments string, finish *string) ChatCompletionChunk {
 	return ChatCompletionChunk{
 		Choices: []ChunkChoice{{

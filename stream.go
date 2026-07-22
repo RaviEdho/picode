@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -82,6 +83,12 @@ func streamAssistant(ctx context.Context, client ChatStreamer, history []Message
 		}
 		// Assemble tool calls that arrive as fragments across multiple chunks.
 		for _, tc := range delta.ToolCalls {
+			// A negative index is invalid, but some incompatible providers can
+			// send one. Reject it rather than indexing the slice with -1 and
+			// terminating the process with a panic.
+			if tc.Index < 0 {
+				return nil, nil, "", fmt.Errorf("invalid tool-call index %d", tc.Index)
+			}
 			for len(toolCalls) <= tc.Index {
 				toolCalls = append(toolCalls, streamedToolCall{})
 			}
